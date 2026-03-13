@@ -1,0 +1,46 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# VSCode
+.vscode/
+
+# Python build
+build/
+dist/
+*.spec
+
+# Logs
+*.log
+
+# Output files
+output/
+
+# Models (AI models are large)
+models/
+
+# Temporary files
+*.tmp
+*.cache
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PyInstaller cache
+__pycache__/
+*.manifest
+*.exe
+
+# PaddleOCR downloaded models
+.paddleocr/
+
+# Continue extension cache
+.continue/
