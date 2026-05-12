@@ -44,3 +44,6 @@ __pycache__/
 
 # Continue extension cache
 .continue/
+
+.env
+app.log

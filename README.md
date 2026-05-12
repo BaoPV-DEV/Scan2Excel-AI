@@ -1,248 +1,85 @@
-# Scan2Excel AI
+# Scan2Excel AI - Công cụ hỗ trợ sản xuất
 
-Scan2Excel AI is a desktop application that processes scanned A4 production forms and automatically extracts structured table data into Excel.
-
-The application uses computer vision and OCR to detect tables, recognize text and handwritten numbers, and export the result into Excel.
-
-The tool runs fully **offline** and can be built into a **Windows executable (.exe)**.
+**Scan2Excel AI** là ứng dụng desktop mạnh mẽ giúp tự động hóa quy trình quản lý sản lượng ngành may. Ứng dụng kết hợp sức mạnh của **Google Gemini AI** để bóc tách dữ liệu từ ảnh chụp bảng sản lượng và tích hợp trực tiếp vào hệ thống file Excel báo cáo.
 
 ---
 
-# Main Features
+## 🚀 Tính năng chính
 
-### Document Processing
+### 1. Tách file nhân viên theo tổ (Tab 1)
+- Đọc danh sách nhân viên tổng của nhà máy.
+- Tự động lọc và tách thành từng file Excel riêng biệt cho mỗi tổ/bộ phận.
+- Sử dụng file mẫu (Template) chuẩn để đảm bảo định dạng đồng nhất.
 
-- Detect A4 document from scanned image
-- Perspective correction
-- Image preprocessing
-- Noise reduction
-- Thresholding
+### 2. Quét ảnh bảng sản lượng bằng AI (Tab 2)
+- Sử dụng mô hình **Gemini 2.0 Flash** để bóc tách dữ liệu.
+- Nhận diện chính xác: Mã hàng, tên công đoạn, định mức thời gian, người thực hiện và số lượng sản phẩm.
+- Hỗ trợ xử lý các ghi chú viết tay phức tạp (ví dụ: `5144 - 204 = 4940`).
+- Cho phép xem và chỉnh sửa dữ liệu trực tiếp trước khi lưu thành file JSON.
 
-### Table Recognition
-
-- Detect table grid lines
-- Segment table cells
-- Extract rows of structured data
-
-### OCR Recognition
-
-Using PaddleOCR:
-
-- Printed text recognition
-- Handwritten number recognition
-- Text region detection
-
-### Data Extraction
-
-Extract fields such as:
-
-- Step Number (STT)
-- Operation Name
-- Standard Time
-- Worker
-- Quantity
-
-### Data Cleaning
-
-Parse expressions like:
-
-51992 = 3140
-
-Extract the final number:
-
-3140
-
-### Excel Export
-
-Export structured data using:
-
-- pandas
-- openpyxl
-
-### Desktop GUI
-
-Built with PySide6.
-
-Features:
-
-- Upload image
-- Drag and drop
-- Preview image
-- Start processing
-- Progress bar
-- Log panel
-- Export Excel
+### 3. Tích hợp dữ liệu vào Excel (Tab 3)
+- Batch Process: Tự động quét hàng loạt file JSON trong thư mục.
+- Đối chiếu mã nhân viên và điền sản lượng vào đúng file Excel của tổ tương ứng.
+- Tự động tạo sheet chi tiết cho từng mã hàng.
+- Cập nhật bảng tổng hợp lương và sản lượng nộp hàng tháng.
 
 ---
 
-# Technology Stack
+## 🛠️ Công nghệ sử dụng
 
-Language
-
-Python 3.10+
-
-Libraries
-
-OpenCV  
-PaddleOCR  
-Pandas  
-OpenPyXL  
-PySide6  
-PyInstaller
+- **Ngôn ngữ**: Python 3.10+
+- **Giao diện**: PySide6 (Qt for Python)
+- **Xử lý dữ liệu**: Pandas, OpenPyXL
+- **Tương tác Excel**: win32com (đảm bảo giữ nguyên định dạng file phức tạp)
+- **AI Engine**: Google GenAI (Gemini API)
 
 ---
 
-# Project Structure
+## 📂 Cấu trúc thư mục dự án
+
+```text
 Scan2Excel-AI/
-│
-├── main.py
-├── gui.py
-│
-├── vision/
-│ ├── preprocess.py
-│ ├── document_detect.py
-│ ├── table_detection.py
-│ └── cell_extraction.py
-│
-├── ocr/
-│ ├── ocr_engine.py
-│ └── text_parser.py
-│
-├── data/
-│ ├── data_model.py
-│ └── data_cleaner.py
-│
-├── export/
-│ └── excel_export.py
-│
-├── utils/
-│ ├── logger.py
-│ └── config.py
-│
-├── assets/
-├── models/
-└── output/
-
+├── main.py                # Điểm khởi đầu của ứng dụng
+├── logic/                 # Các module xử lý nghiệp vụ chính
+│   ├── excel_processor.py   # Tách file nhân viên (Tab 1)
+│   └── excel_integration.py # Tích hợp dữ liệu vào Excel (Tab 3)
+├── ui/                    # Các module giao diện người dùng
+│   ├── gui.py              # Cửa sổ chính và quản lý Tab
+│   ├── ui_part1_split.py   # Giao diện Tab 1
+│   ├── ui_part2_scan.py    # Giao diện Tab 2 (Xử lý AI)
+│   └── ui_part3_link.py    # Giao diện Tab 3 (Tích hợp)
+├── utils/                 # Các tiện ích hệ thống
+│   ├── paths.py           # Quản lý đường dẫn dữ liệu
+│   ├── logger.py          # Hệ thống ghi nhật ký
+│   └── config.py          # Cấu hình ứng dụng
+├── Template/              # Chứa file Excel mẫu (.xlsx)
+└── scratch/               # Các script kiểm tra và nháp
+```
 
 ---
 
-# Module Overview
+## ⚙️ Cài đặt và Cấu hình
 
-### `main.py`
+1. **Cài đặt thư viện**:
+   ```bash
+   pip install PySide6 pandas openpyxl python-dotenv google-genai pywin32
+   ```
 
-Application entry point.
+2. **Cấu hình biến môi trường**:
+   Tạo file `.env` tại thư mục gốc với nội dung:
+   ```text
+   GEMINI_API_KEY=your_google_gemini_api_key_here
+   EXCEL_SHEET_PASSWORD=8863
+   ```
 
-Responsibilities:
-
-- Initialize application
-- Load configuration
-- Initialize logging
-- Launch the GUI
-
----
-
-### `gui.py`
-
-Desktop interface implemented with **PySide6**.
-
-Main features:
-
-- Upload image
-- Drag & drop image
-- Preview scanned form
-- Start processing pipeline
-- Display progress bar
-- Display logs
-- Export results to Excel
+3. **Chạy ứng dụng**:
+   ```bash
+   python main.py
+   ```
 
 ---
 
-### `vision/`
-
-Computer vision pipeline responsible for image processing and table detection.
-
-**Files**
-
-`preprocess.py`
-
-- image loading
-- grayscale conversion
-- thresholding
-- noise reduction
-
-`document_detect.py`
-
-- detect A4 document
-- perspective correction
-- warp document image
-
-`table_detection.py`
-
-- detect horizontal lines
-- detect vertical lines
-- detect table structure
-
-`cell_extraction.py`
-
-- extract table cells
-- sort cells into rows
-
----
-
-### `ocr/`
-
-OCR recognition pipeline.
-
-**Files**
-
-`ocr_engine.py`
-
-- initialize PaddleOCR
-- detect text regions
-- recognize text
-
-`text_parser.py`
-
-- parse OCR output
-- detect numbers
-- extract quantities
-- interpret expressions
-
-Example:
-51992 = 3140
-
-Result: 3140
-
-
----
-
-### `data/`
-
-Data structure and data cleaning logic.
-
-`data_model.py`
-
-Defines structured JSON format:
-
-{
-"product": "",
-"total_quantity": "",
-"operations":[
-{
-"step":1,
-"name":"",
-"time":"",
-"worker":"",
-"quantity":""
-}
-]
-}
-
-
-`data_cleaner.py`
-
-- clean OCR errors
-- normalize numbers
-- validate extracted rows
-
----
+## 📝 Lưu ý quan trọng
+- Cần có kết nối Internet để sử dụng tính năng Quét ảnh AI (Tab 2).
+- Các file Excel mẫu trong thư mục `Template/` phải được giữ nguyên tên và cấu trúc sheet để ứng dụng hoạt động chính xác.
+- Khi chạy ứng dụng, hãy đảm bảo không có file Excel mục tiêu nào đang được mở để tránh lỗi tranh chấp quyền truy cập.
