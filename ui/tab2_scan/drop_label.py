@@ -1,12 +1,10 @@
 from PySide6.QtWidgets import QLabel
 from PySide6.QtCore import Qt
 
+# Lớp hỗ trợ hiển thị vùng kéo thả file ảnh.
 class DropLabel(QLabel):
-    """
-    Lớp hỗ trợ hiển thị vùng kéo thả file ảnh.
-    """
+    # Khởi tạo vùng kéo thả với style đứt đoạn
     def __init__(self, text, parent=None):
-        # Khởi tạo vùng kéo thả với style đứt đoạn
         super().__init__(text, parent)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet("""

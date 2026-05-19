@@ -4,7 +4,8 @@ import re
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QProgressBar, QTextEdit, 
-    QFileDialog, QScrollArea, QSplitter, QLineEdit, QMessageBox, QComboBox, QInputDialog, QFrame, QDialog
+    QFileDialog, QScrollArea, QSplitter, QLineEdit, QMessageBox, QComboBox, QInputDialog, QFrame, QDialog,
+    QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap, QFont, QIntValidator
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 
 # Import các thành phần nội bộ từ package tab2_scan
 from ui.tab2_scan.drop_label import DropLabel
-from ui.tab2_scan.scan_thread import ProcessingThread
+from ui.tab2_scan.scan_thread import BatchProcessingThread
 from ui.tab2_scan.data_dialog import DataEditorDialog
 from utils.paths import get_json_data_path
 
@@ -20,14 +21,14 @@ from utils.paths import get_json_data_path
 load_dotenv()
 INITIAL_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-# Class Giao diện chính cho chức năng Scan Ảnh Sản Lượng (Tab 2).
 class ScanProductionWidget(QWidget):
-    # Khởi tạo và thiết lập Widget
+    """
+    Giao diện Quét Ảnh Sản Lượng (Tab 2) - Nâng cấp hỗ trợ Batch OCR hàng loạt theo cấu trúc thư mục mã hàng.
+    """
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
-        self.image_paths = []
-        self.processed_data = None
+        self.batch_items = []
         self.current_api_key = INITIAL_API_KEY
         
         self.setStyleSheet("""
@@ -41,10 +42,11 @@ class ScanProductionWidget(QWidget):
             QProgressBar::chunk { background-color: #10B981; border-radius: 4px; }
             QTextEdit { background-color: #1E1E1E; color: #10B981; font-family: Consolas; font-size: 13px; border-radius: 6px; padding: 10px; }
             QLineEdit:disabled { background-color: #E5E7EB; color: #6B7280; }
+            QTableWidget { background-color: white; border: 1px solid #E5E7EB; border-radius: 6px; gridline-color: #F3F4F6; }
+            QHeaderView::section { background-color: #F3F4F6; padding: 6px; border: 1px solid #E5E7EB; font-weight: bold; font-size: 12px; }
         """)
         self.init_ui()
         
-    # Thiết lập bố cục giao diện
     def init_ui(self):
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(15, 15, 15, 15)
@@ -52,28 +54,26 @@ class ScanProductionWidget(QWidget):
         
         splitter = QSplitter(Qt.Horizontal)
         
-        # Cột trái: Upload và Preview ảnh
+        # -------------------------------------------------------------
+        # Cột trái: Cấu hình đầu vào & Quét thư mục
+        # -------------------------------------------------------------
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
-        self.upload_btn = QPushButton("📁 Tải Ảnh Lên")
-        self.upload_btn.clicked.connect(self.upload_image)
-        self.drop_label = DropLabel("Kéo thả ảnh vào đây\n\n(Hỗ trợ PNG, JPG, JPEG)")
-        self.preview_label = QLabel("Chưa có ảnh nào được tải")
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setStyleSheet("background-color: #E5E7EB; border-radius: 8px;")
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self.preview_label)
-        scroll.setStyleSheet("border: none;")
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
+        left_layout.addWidget(QLabel("📂 CẤU HÌNH & TẢI THƯ MỤC", font=QFont("Arial", 13, QFont.Bold)))
+        
+        self.upload_btn = QPushButton("📂 CHỌN THƯ MỤC QUÉT BATCH")
+        self.upload_btn.clicked.connect(self.upload_folder)
         left_layout.addWidget(self.upload_btn)
-        left_layout.addWidget(self.drop_label)
-        left_layout.addWidget(QLabel("🖼️ Xem Trước Ảnh", font=QFont("Arial", 12, QFont.Bold)))
-        left_layout.addWidget(scroll, stretch=1)
         
-        # Cột phải: Cấu hình và Nhật ký
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
+        self.drop_label = DropLabel("Kéo thả thư mục chứa các mã hàng vào đây\n\n(Hỗ trợ thư mục chứa ảnh PNG, JPG, JPEG)")
+        left_layout.addWidget(self.drop_label)
+        
+        self.folder_label = QLabel("Chưa chọn thư mục quét hàng loạt nào.")
+        self.folder_label.setStyleSheet("color: #6B7280; font-style: italic; padding: 5px;")
+        self.folder_label.setWordWrap(True)
+        left_layout.addWidget(self.folder_label)
         
         # --- Phần Cấu hình Model và Key ---
         config_group = QFrame()
@@ -119,31 +119,44 @@ class ScanProductionWidget(QWidget):
         key_layout.addWidget(self.unlock_btn)
         config_layout.addLayout(key_layout)
         
-        right_layout.addWidget(QLabel("⚙️ Cấu Hình Hệ Thống", font=QFont("Arial", 12, QFont.Bold)))
-        right_layout.addWidget(config_group)
+        left_layout.addWidget(QLabel("⚙️ Cấu Hình Hệ Thống", font=QFont("Arial", 12, QFont.Bold)))
+        left_layout.addWidget(config_group)
+        left_layout.addStretch(1)
         
-        # Nhập mức thưởng
-        bonus_layout = QHBoxLayout()
-        bonus_layout.addWidget(QLabel("💰 Thưởng mã hàng mới (%):"))
-        self.bonus_input = QLineEdit("0")
-        self.bonus_input.setValidator(QIntValidator(0, 999999999))
-        self.bonus_input.setStyleSheet("padding: 8px; font-size: 14px;")
-        bonus_layout.addWidget(self.bonus_input)
-        right_layout.addLayout(bonus_layout)
+        # -------------------------------------------------------------
+        # Cột phải: Bảng danh sách Mã hàng Batch & Logs
+        # -------------------------------------------------------------
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Nút bắt đầu OCR
-        self.process_btn = QPushButton("🚀 BẮT ĐẦU QUÉT ẢNH (AI)")
+        right_layout.addWidget(QLabel("📋 DANH SÁCH MÃ HÀNG BATCH", font=QFont("Arial", 13, QFont.Bold)))
+        
+        # Bảng hiển thị danh sách Batch
+        self.table_batch = QTableWidget()
+        self.table_batch.setColumnCount(6)
+        self.table_batch.setHorizontalHeaderLabels(["STT", "Thư mục con (Mã)", "Số ảnh", "Thưởng mã (%)", "Trạng thái", "Hành động"])
+        
+        header = self.table_batch.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        right_layout.addWidget(self.table_batch, stretch=3)
+        
+        # Nút bắt đầu Batch OCR
+        self.process_btn = QPushButton("🚀 BẮT ĐẦU QUÉT HÀNG LOẠT (AI)")
         self.process_btn.setObjectName("ProcessBtn")
         self.process_btn.setEnabled(False)
         self.process_btn.clicked.connect(self.start_processing)
+        
         self.progress_bar = QProgressBar()
+        self.progress_bar.setValue(0)
         
         # Nhóm các nút chức năng phụ
         actions_layout = QHBoxLayout()
-        self.preview_btn = QPushButton("👁️ Xem / Sửa Dữ Liệu")
-        self.preview_btn.setEnabled(False)
-        self.preview_btn.clicked.connect(self.preview_json)
-        
         self.import_json_btn = QPushButton("📂 Mở File JSON")
         self.import_json_btn.clicked.connect(self.import_json)
         self.import_json_btn.setStyleSheet("background-color: #F59E0B;") 
@@ -152,7 +165,6 @@ class ScanProductionWidget(QWidget):
         self.clear_btn.setObjectName("ClearBtn")
         self.clear_btn.clicked.connect(self.clear_data)
         
-        actions_layout.addWidget(self.preview_btn)
         actions_layout.addWidget(self.import_json_btn)
         actions_layout.addWidget(self.clear_btn)
         
@@ -163,25 +175,21 @@ class ScanProductionWidget(QWidget):
         right_layout.addWidget(self.progress_bar)
         right_layout.addLayout(actions_layout)
         right_layout.addWidget(QLabel("📝 Nhật Ký Xử Lý", font=QFont("Arial", 12, QFont.Bold)))
-        right_layout.addWidget(self.log_panel, stretch=1)
+        right_layout.addWidget(self.log_panel, stretch=2)
         
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([400, 500])
+        splitter.setSizes([380, 620])
         main_layout.addWidget(splitter)
 
-    # Yêu cầu mật khẩu để đổi API Key
     def unlock_key_input(self):
-        load_dotenv(override=True) # Refresh lại các biến từ .env
+        load_dotenv(override=True)
         admin_pass = os.getenv("ADMIN_PASSWORD", "09032001")
-        
         password, ok = QInputDialog.getText(self, "Xác thực", "Nhập mật khẩu quản trị để đổi Key:", QLineEdit.Password)
         if ok and password == admin_pass: 
-            # Nếu người dùng chưa gõ gì mới, hiển thị key mới nhất từ .env
             env_key = os.getenv("GEMINI_API_KEY", "")
             if not self.key_input.text() or self.key_input.text() == self.current_api_key:
                 self.key_input.setText(env_key)
-            
             self.key_input.setDisabled(False)
             self.key_input.setEchoMode(QLineEdit.Normal)
             self.unlock_btn.setText("🔒 Khóa lại")
@@ -191,7 +199,6 @@ class ScanProductionWidget(QWidget):
         elif ok:
             QMessageBox.warning(self, "Lỗi", "Mật khẩu không chính xác!")
 
-    # Khóa lại ô nhập API Key và lưu giá trị
     def lock_key_input(self):
         self.current_api_key = self.key_input.text().strip()
         self.key_input.setDisabled(True)
@@ -201,126 +208,278 @@ class ScanProductionWidget(QWidget):
         self.unlock_btn.clicked.connect(self.unlock_key_input)
         self.log_panel.append("🔒 Đã khóa và cập nhật API Key mới.")
 
-    # Mở hộp thoại chọn file ảnh
-    def upload_image(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Chọn Ảnh Bảng Sản Lượng", "", "Images (*.png *.jpg *.jpeg)")
-        if files: self.load_images(files)
-        
-    # Tự động tạo thư mục the def dragEnterEvent():
+    def upload_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Chọn Thư Mục Quét Hàng Loạt")
+        if folder:
+            self.folder_label.setText(f"📁 Đường dẫn: {folder}")
+            self.folder_label.setToolTip(folder)
+            self.load_batch_folders(folder)
+
     def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls(): e.accept()
-        
-    # Tự động tạo thư mục the def dropEvent():
+        if e.mimeData().hasUrls():
+            e.accept()
+
     def dropEvent(self, e):
-        files = [u.toLocalFile() for u in e.mimeData().urls() if u.toLocalFile().lower().endswith(('.png', '.jpg', '.jpeg'))]
-        if files: self.load_images(files)
+        folders = [u.toLocalFile() for u in e.mimeData().urls() if os.path.isdir(u.toLocalFile())]
+        if folders:
+            folder = folders[0]
+            self.folder_label.setText(f"📁 Đường dẫn: {folder}")
+            self.folder_label.setToolTip(folder)
+            self.load_batch_folders(folder)
+
+    def load_batch_folders(self, root_folder):
+        self.batch_items = []
+        self.table_batch.setRowCount(0)
         
-    # Tự động tạo thư mục the def load_images():
-    def load_images(self, paths):
-        self.image_paths = paths
-        self.preview_label.setPixmap(QPixmap(paths[0]).scaled(400, 400, Qt.KeepAspectRatio))
-        self.process_btn.setEnabled(True)
-        self.log_panel.append(f"🟢 Đã tải {len(paths)} ảnh.")
+        try:
+            subdirs = sorted([d for d in os.listdir(root_folder) if os.path.isdir(os.path.join(root_folder, d))])
+        except Exception as e:
+            self.log_panel.append(f"❌ Lỗi đọc thư mục: {e}")
+            return
         
-    # Khởi động luồng xử lý AI với model và key đã chọn
+        row_idx = 0
+        for subdir in subdirs:
+            subdir_path = os.path.join(root_folder, subdir)
+            images = []
+            for f in os.listdir(subdir_path):
+                if f.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    images.append(os.path.join(subdir_path, f))
+            
+            if not images:
+                continue
+            
+            self.table_batch.insertRow(row_idx)
+            
+            # STT
+            self.table_batch.setItem(row_idx, 0, QTableWidgetItem(str(row_idx + 1)))
+            # Tên thư mục con (Mã)
+            self.table_batch.setItem(row_idx, 1, QTableWidgetItem(subdir))
+            # Số ảnh
+            self.table_batch.setItem(row_idx, 2, QTableWidgetItem(f"{len(images)} ảnh"))
+            
+            # Thưởng mã hàng mới (%)
+            bonus_edit = QLineEdit("0")
+            bonus_edit.setValidator(QIntValidator(0, 100))
+            bonus_edit.setAlignment(Qt.AlignCenter)
+            bonus_edit.setStyleSheet("padding: 2px; border: 1px solid #D1D5DB; border-radius: 3px; min-width: 40px;")
+            self.table_batch.setCellWidget(row_idx, 3, bonus_edit)
+            
+            # Trạng thái
+            status_item = QTableWidgetItem("Chưa quét")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            self.table_batch.setItem(row_idx, 4, status_item)
+            
+            # Hành động
+            action_widget = QWidget()
+            action_layout = QHBoxLayout(action_widget)
+            action_layout.setContentsMargins(2, 2, 2, 2)
+            action_layout.setSpacing(5)
+            
+            view_btn = QPushButton("👁️")
+            view_btn.setToolTip("Xem/Sửa dữ liệu")
+            view_btn.setStyleSheet("background-color: #3B82F6; color: white; padding: 2px; border-radius: 3px; min-width: 25px; font-size: 11px;")
+            view_btn.setEnabled(False)
+            
+            retry_btn = QPushButton("🔄")
+            retry_btn.setToolTip("Quét lại mã này")
+            retry_btn.setStyleSheet("background-color: #F59E0B; color: white; padding: 2px; border-radius: 3px; min-width: 25px; font-size: 11px;")
+            retry_btn.setEnabled(False)
+            
+            action_layout.addWidget(view_btn)
+            action_layout.addWidget(retry_btn)
+            action_layout.setAlignment(Qt.AlignCenter)
+            
+            self.table_batch.setCellWidget(row_idx, 5, action_widget)
+            
+            item_data = {
+                "row": row_idx,
+                "subdir_name": subdir,
+                "subdir_path": subdir_path,
+                "images": images,
+                "bonus_edit": bonus_edit,
+                "view_btn": view_btn,
+                "retry_btn": retry_btn,
+                "processed_json": None
+            }
+            self.batch_items.append(item_data)
+            
+            view_btn.clicked.connect(lambda checked=False, r=row_idx: self.view_single_batch_item(r))
+            retry_btn.clicked.connect(lambda checked=False, r=row_idx: self.retry_single_batch_item(r))
+            
+            row_idx += 1
+            
+        self.process_btn.setEnabled(len(self.batch_items) > 0)
+        self.log_panel.append(f"🟢 Đã load {len(self.batch_items)} mã hàng từ thư mục con.")
+
+    def set_controls_enabled(self, enabled):
+        self.upload_btn.setEnabled(enabled)
+        self.model_combo.setEnabled(enabled)
+        self.key_input.setEnabled(enabled and self.unlock_btn.text() == "🔒 Khóa lại")
+        self.unlock_btn.setEnabled(enabled)
+        self.process_btn.setEnabled(enabled and len(self.batch_items) > 0)
+        self.import_json_btn.setEnabled(enabled)
+        self.clear_btn.setEnabled(enabled)
+        
+        for item in self.batch_items:
+            item["bonus_edit"].setEnabled(enabled)
+            item["view_btn"].setEnabled(enabled and item["processed_json"] is not None)
+            row = item["row"]
+            status_text = self.table_batch.item(row, 4).text()
+            item["retry_btn"].setEnabled(enabled and status_text != "Chưa quét")
+
     def start_processing(self):
         api_key = self.key_input.text().strip() or self.current_api_key
-        model_name = self.model_combo.currentText()
-
         if not api_key:
-            self.log_panel.append("❌ Lỗi: Chưa cấu hình API Key.")
+            QMessageBox.warning(self, "Lỗi", "Chưa cấu hình API Key.")
             return
-
-        self.process_btn.setEnabled(False)
-        self.log_panel.clear()
         
-        # Khởi tạo luồng xử lý Gemini
-        self.thread = ProcessingThread(self.image_paths, api_key, model_name)
+        # Chỉ quét các mã hàng chưa quét thành công
+        batch_data = []
+        for item in self.batch_items:
+            if item["processed_json"] is None:
+                batch_data.append({
+                    "row": item["row"],
+                    "subdir_name": item["subdir_name"],
+                    "subdir_path": item["subdir_path"],
+                    "images": item["images"],
+                    "bonus": int(item["bonus_edit"].text() or 0)
+                })
+        
+        if not batch_data:
+            QMessageBox.information(self, "Thông báo", "Tất cả các mã hàng đã được quét thành công!")
+            return
+        
+        self.set_controls_enabled(False)
+        self.progress_bar.setValue(0)
+        self.log_panel.append(f"🚀 Khởi chạy quét hàng loạt {len(batch_data)} mã hàng...")
+        
+        model_name = self.model_combo.currentText()
+        self.thread = BatchProcessingThread(batch_data, api_key, model_name)
+        self.thread.item_started.connect(self.on_item_started)
+        self.thread.item_finished.connect(self.on_item_finished)
         self.thread.progress.connect(self.progress_bar.setValue)
         self.thread.log.connect(self.log_panel.append)
-        self.thread.finished.connect(self.on_finished)
+        self.thread.finished.connect(self.on_batch_finished)
         self.thread.start()
+
+    def on_item_started(self, row, subdir_name):
+        status_item = self.table_batch.item(row, 4)
+        status_item.setText("🟡 Đang quét...")
+        status_item.setForeground(Qt.blue)
+
+    def on_item_finished(self, row, status, data, msg_or_path):
+        status_item = self.table_batch.item(row, 4)
+        item = self.batch_items[row]
         
-    # Xử lý kết quả trả về từ AI
-    def on_finished(self, data):
-        if not data:
-            self.process_btn.setEnabled(True)
+        if status == "success":
+            status_item.setText("🟢 Thành công")
+            status_item.setForeground(Qt.darkGreen)
+            item["processed_json"] = data
+            item["view_btn"].setEnabled(True)
+            item["retry_btn"].setEnabled(True)
+            self.log_panel.append(f"✔️ Đã lưu kết quả tại {os.path.basename(msg_or_path)}")
+        else:
+            status_item.setText("🔴 Lỗi")
+            status_item.setForeground(Qt.red)
+            item["retry_btn"].setEnabled(True)
+            self.log_panel.append(f"❌ Mã hàng {item['subdir_name']} quét thất bại: {msg_or_path}")
+
+    def on_batch_finished(self):
+        self.set_controls_enabled(True)
+        self.progress_bar.setValue(100)
+        self.log_panel.append("🎉 Đã hoàn thành toàn bộ tiến trình quét Batch!")
+        QMessageBox.information(self, "Hoàn tất", "Hoàn thành quét hàng loạt!")
+
+    def retry_single_batch_item(self, row_idx):
+        api_key = self.key_input.text().strip() or self.current_api_key
+        if not api_key:
+            QMessageBox.warning(self, "Lỗi", "Chưa cấu hình API Key.")
             return
             
-        try:
-            bonus_val = int(self.bonus_input.text() or "0")
-            if "thong_tin_chung" in data:
-                data["thong_tin_chung"]["thuong_ma_hang_moi"] = bonus_val
-        except:
-            pass
-            
-        self.processed_data = data
-        self.preview_btn.setEnabled(True)
-        self.process_btn.setEnabled(True)
+        item = self.batch_items[row_idx]
+        single_batch_data = [{
+            "row": item["row"],
+            "subdir_name": item["subdir_name"],
+            "subdir_path": item["subdir_path"],
+            "images": item["images"],
+            "bonus": int(item["bonus_edit"].text() or 0)
+        }]
         
-        self.save_processed_data(data)
-        self.log_panel.append("✅ Xong! Bạn có thể kiểm tra và sửa lại dữ liệu.")
-        self.progress_bar.setValue(100)
+        self.set_controls_enabled(False)
+        self.log_panel.append(f"🔄 Quét lại mã riêng lẻ: {item['subdir_name']}...")
         
-    # Lưu dữ liệu JSON xuống ổ đĩa
-    def save_processed_data(self, data):
-        try:
-            thong_tin = data.get("thong_tin_chung", {})
-            thoi_gian = thong_tin.get("thoi_gian", "N/A")
-            to_sx = thong_tin.get("to_san_xuat", "N/A")
-            ma_hang = thong_tin.get("ma_hang", "processed_data")
-            
-            match_date = re.search(r'(\d{1,2})[/-](\d{4})', thoi_gian)
-            month = match_date.group(1).zfill(2) if match_date else datetime.now().strftime("%m")
-            year = match_date.group(2) if match_date else datetime.now().strftime("%Y")
-            
-            to_val = str(to_sx).strip()
-            team_num_match = re.search(r'\d+', to_val)
-            team_folder = f"Tổ {team_num_match.group()}" if team_num_match else "Tổ Unknown"
-            
-            json_dir = get_json_data_path(year, month, team_folder)
-            c_ma_hang = re.sub(r'[\\/*?:"<>|]', "_", str(ma_hang)).strip() or "N_A"
-            json_path = os.path.join(json_dir, f"{c_ma_hang}.json")
-            
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-            self.log_panel.append(f"💾 Đã lưu tại: {json_path}")
-        except Exception as e:
-            self.log_panel.append(f"⚠️ Lỗi lưu JSON: {e}")
+        model_name = self.model_combo.currentText()
+        self.thread = BatchProcessingThread(single_batch_data, api_key, model_name)
+        self.thread.item_started.connect(self.on_item_started)
+        self.thread.item_finished.connect(self.on_item_finished)
+        self.thread.log.connect(self.log_panel.append)
+        self.thread.finished.connect(self.on_retry_finished)
+        self.thread.start()
 
-    # Mở hộp thoại để xem và chỉnh sửa dữ liệu JSON trực tiếp
-    def preview_json(self):
-        if not self.processed_data: return
-        dialog = DataEditorDialog(self.processed_data, self)
+    def on_retry_finished(self):
+        self.set_controls_enabled(True)
+        self.log_panel.append("✨ Hoàn tất quét lại mã hàng riêng lẻ!")
+
+    def view_single_batch_item(self, idx):
+        item = self.batch_items[idx]
+        if not item["processed_json"]:
+            return
+        
+        dialog = DataEditorDialog(item["processed_json"], self)
         if dialog.exec() == QDialog.Accepted:
             updated = dialog.get_updated_data()
             if updated:
-                self.processed_data = updated
-                self.save_processed_data(updated)
-                self.log_panel.append("✅ Dữ liệu đã được cập nhật thành công.")
+                item["processed_json"] = updated
                 
-    # Mở file JSON đã có từ trước để kiểm tra hoặc sửa lại
+                # Lưu lại JSON
+                try:
+                    thong_tin = updated.get("thong_tin_chung", {})
+                    thoi_gian = thong_tin.get("thoi_gian", "N/A")
+                    to_sx = thong_tin.get("to_san_xuat", "N/A")
+                    ma_hang = thong_tin.get("ma_hang", item["subdir_name"])
+                    
+                    match_date = re.search(r'(\d{1,2})[/-](\d{4})', thoi_gian)
+                    month = match_date.group(1).zfill(2) if match_date else datetime.now().strftime("%m")
+                    year = match_date.group(2) if match_date else datetime.now().strftime("%Y")
+                    
+                    to_val = str(to_sx).strip()
+                    team_num_match = re.search(r'\d+', to_val)
+                    team_folder = f"Tổ {team_num_match.group()}" if team_num_match else "Tổ Unknown"
+                    
+                    json_dir = get_json_data_path(year, month, team_folder)
+                    c_ma_hang = re.sub(r'[\\/*?:"<>|]', "_", str(ma_hang)).strip() or "N_A"
+                    json_path = os.path.join(json_dir, f"{c_ma_hang}.json")
+                    
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(updated, f, indent=4, ensure_ascii=False)
+                    self.log_panel.append(f"💾 Đã cập nhật và lưu JSON: {json_path}")
+                except Exception as e:
+                    self.log_panel.append(f"⚠️ Lỗi lưu JSON cập nhật: {e}")
+
     def import_json(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Chọn file JSON sản lượng", "", "JSON Files (*.json)")
-        if not file_path: return
+        if not file_path:
+            return
         
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                self.processed_data = data
-                self.preview_btn.setEnabled(True)
-                self.log_panel.append(f"✅ Đã tải dữ liệu từ file: {os.path.basename(file_path)}")
-                self.preview_json() 
+                
+            dialog = DataEditorDialog(data, self)
+            if dialog.exec() == QDialog.Accepted:
+                updated = dialog.get_updated_data()
+                if updated:
+                    # Lưu lại file vừa chọn
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        json.dump(updated, f, indent=4, ensure_ascii=False)
+                    self.log_panel.append(f"💾 Đã cập nhật và lưu trực tiếp file JSON: {os.path.basename(file_path)}")
         except Exception as e:
-            QMessageBox.critical(self, "Lỗi", f"Không thể đọc file JSON: {str(e)}")
-            
-    # Xóa trắng toàn bộ dữ liệu hiện tại trên giao diện
+            QMessageBox.critical(self, "Lỗi", f"Không thể đọc/ghi file JSON: {str(e)}")
+
     def clear_data(self):
-        self.image_paths = []
-        self.processed_data = None
-        self.preview_label.clear()
-        self.preview_label.setText("Chưa có ảnh nào được tải")
+        self.batch_items = []
+        self.table_batch.setRowCount(0)
+        self.folder_label.setText("Chưa chọn thư mục quét hàng loạt nào.")
         self.log_panel.clear()
         self.progress_bar.setValue(0)
-        self.preview_btn.setEnabled(False)
         self.process_btn.setEnabled(False)
