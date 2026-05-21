@@ -74,6 +74,14 @@ class DataEditorDialog(QDialog):
         self.table.setHorizontalHeaderLabels(["STT", "Mô Tả", "Định Mức", "Nhân Sự", "Tổng"])
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked)
         
+        # Cấu hình tự động dãn các cột tối ưu nhất, lấp đầy toàn bộ chiều rộng bảng
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # STT vừa vặn nội dung
+        header.setSectionResizeMode(1, QHeaderView.Stretch)           # Mô Tả dãn rộng tối đa
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Định Mức vừa vặn nội dung
+        header.setSectionResizeMode(3, QHeaderView.Stretch)           # Nhân Sự dãn rộng tối đa
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Tổng vừa vặn nội dung
+        
         cong_doan = self.data.get("danh_sach_cong_doan", [])
         self.table.setRowCount(len(cong_doan))
         for i, cd in enumerate(cong_doan):

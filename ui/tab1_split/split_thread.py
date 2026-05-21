@@ -11,14 +11,12 @@ class ExcelProcessThread(QThread):
     finished_signal = Signal(bool, str)
 
     # Khởi tạo luồng xử lý
-    def __init__(self, input_path, template_path, output_dir, month, year, organize_folders):
+    def __init__(self, input_path, output_dir, month, year):
         super().__init__()
         self.input_path = input_path
-        self.template_path = template_path
         self.output_dir = output_dir
         self.month = month
         self.year = year
-        self.organize_folders = organize_folders
 
     # Gửi thông báo nhật ký về giao diện
     def log_callback(self, message):
@@ -28,29 +26,17 @@ class ExcelProcessThread(QThread):
     def progress_callback(self, value):
         self.progress_signal.emit(value)
 
-    # Tự động tạo thư mục theo Năm/Tháng nếu được chọn
+    # Chạy quy trình xử lý chính
     def run(self):
-        final_output = self.output_dir
-        if self.organize_folders:
-            final_output = os.path.join(self.output_dir, self.year, self.month)
-            
-            # Làm mới thư mục (xóa cũ tạo mới) để đảm bảo dữ liệu sạch
-            if os.path.exists(final_output):
-                try:
-                    import shutil
-                    shutil.rmtree(final_output)
-                    self.log_callback(f"🧹 Đã xóa thư mục cũ để làm mới dữ liệu: {final_output}")
-                except Exception as e:
-                    self.log_callback(f"⚠️ Cảnh báo: Không thể xóa thư mục cũ (có thể file đang mở): {str(e)}")
-
-            os.makedirs(final_output, exist_ok=True)
-            self.log_callback(f"📂 Đã tạo thư mục lưu trữ: {final_output}")
+        # Đảm bảo thư mục output tồn tại
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.log_callback(f"📂 Thư mục lưu trữ: {self.output_dir}")
 
         # Gọi hàm xử lý logic từ module excel_processor
         success, message = process_excel(
             self.input_path, 
-            self.template_path, 
-            final_output, 
+            None,  # template_path không còn cần (tự chọn theo phân loại)
+            self.output_dir, 
             self.month, 
             self.year, 
             self.log_callback,

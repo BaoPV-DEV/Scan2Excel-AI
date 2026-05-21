@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
-    QPushButton, QComboBox, QTextEdit, QFileDialog, QMessageBox, QFrame, QProgressBar, QCheckBox
+    QPushButton, QComboBox, QTextEdit, QFileDialog, QMessageBox, QFrame, QProgressBar
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -68,11 +68,9 @@ class SplitExcelWidget(QWidget):
         self.btn_browse_input = QPushButton("📂 Chọn File")
         self.btn_browse_input.clicked.connect(self.browse_input)
         file_layout.addWidget(self.btn_browse_input, 0, 2)
-
-        self.template_path = os.path.join(os.getcwd(), "Template", "to_may_file_mau.xlsx")
         layout.addWidget(file_frame)
 
-        # Phần cấu hình Thời gian
+        # Phần cấu hình Thời gian (Tháng/Năm)
         date_frame = QFrame()
         date_frame.setObjectName("SectionFrame")
         date_layout = QHBoxLayout(date_frame)
@@ -89,12 +87,7 @@ class SplitExcelWidget(QWidget):
         self.combo_year.setCurrentText(str(now.year))
         date_layout.addWidget(self.combo_year)
         date_layout.addStretch()
-        
-        self.check_organize = QCheckBox("Tự động phân loại thư mục theo Năm/Tháng")
-        self.check_organize.setChecked(True)
-        
         layout.addWidget(date_frame)
-        layout.addWidget(self.check_organize)
 
         # Nút thực hiện chính và Progress Bar
         self.btn_run = QPushButton("🚀 THỰC HIỆN TÁCH FILE")
@@ -123,6 +116,7 @@ class SplitExcelWidget(QWidget):
 
         month = self.combo_month.currentText()
         year = self.combo_year.currentText()
+        # Thư mục output tự động: ROOT_PATH/01_danh_sach_chia_to/YYYY/MM
         output_dir = get_split_excel_path(year, month)
 
         self.btn_run.setEnabled(False)
@@ -130,7 +124,7 @@ class SplitExcelWidget(QWidget):
         self.progress_bar.setValue(0)
 
         self.thread = ExcelProcessThread(
-            self.input_edit.text(), self.template_path, output_dir, month, year, False
+            self.input_edit.text(), output_dir, month, year
         )
         self.thread.log_signal.connect(self.log_area.append)
         self.thread.progress_signal.connect(self.progress_bar.setValue)
