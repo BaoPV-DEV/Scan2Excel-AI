@@ -47,7 +47,7 @@ TEMPLATE_CONFIG = {
         "has_danh_sach": True, "luong_cell": "O3", "cd_cell": "D3",
     },
     "gt/bao_ve_template.xlsx": {
-        "has_danh_sach": False, "luong_cell": "N3", "cd_cell": "D3",
+        "has_danh_sach": False, "luong_cell": "O3", "cd_cell": "D3",
         "update_a2": False, "update_a3": False,
     },
     "gt/bep_an_va_cong_vu_template.xlsx": {
