@@ -20,7 +20,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Idol Linh tính lương")
         self.setGeometry(100, 100, 1000, 750)
         self.setWindowIcon(QIcon("app_icon.png"))
-        self.showMaximized() # Mở to toàn màn hình
         
         # Widget trung tâm và Layout chính
         central_widget = QWidget()

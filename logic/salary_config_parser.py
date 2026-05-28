@@ -11,14 +11,13 @@ class SalarySourceConfig:
     
     def __init__(self, config_path: str = None):
         """Initialize config parser from JSON file"""
+        from utils.paths import get_salary_sources_path, get_base_path
         if config_path is None:
-            # Default path: ../Template/salary_sources.json (one level up from logic/)
-            current_dir = os.path.abspath(os.path.dirname(__file__))
-            config_path = os.path.join(current_dir, "..", "Template", "salary_sources.json")
+            config_path = get_salary_sources_path()
         
         self.config_path = config_path
         self.config = self._load_config()
-        self.base_path = self.config.get("base_path", "D:\\Linh_Salary_Tool")
+        self.base_path = self.config.get("base_path", get_base_path())
         self.templates = self.config.get("templates", {})
     
     def _load_config(self) -> dict:
@@ -109,9 +108,15 @@ class SalarySourceConfig:
     def parse_column_config(self, col_config: Dict) -> Dict:
         """
         Parse individual column configuration.
-        Returns dict with 'type' (formula or source), and corresponding data.
+        Returns dict with 'type' (formula, team_formula, or source), and corresponding data.
         """
-        if "formula" in col_config:
+        if "type" in col_config and col_config["type"] == "team_formula":
+            return {
+                "type": "team_formula",
+                "team_configs": col_config.get("team_configs", {}),
+                "description": col_config.get("description", "")
+            }
+        elif "formula" in col_config:
             return {
                 "type": "formula",
                 "formula": col_config["formula"],

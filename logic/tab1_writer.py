@@ -1,6 +1,7 @@
 import os
 import shutil
 import re
+import json
 import pythoncom
 import win32com.client as win32
 from logic.tab1_classifier import TEMPLATE_CONFIG
@@ -287,6 +288,13 @@ def write_all_groups(classified_data, output_dir, mm, yyyy, log_callback, progre
     
     processed = 0
     excel_app = None
+    
+    # ✨ NEW: Tạo dict lưu metadata mapping
+    metadata = {
+        "year_month": f"{yyyy}-{mm}",
+        "output_dir": output_dir,
+        "mapping": {}
+    }
 
     try:
         # Khởi tạo ứng dụng Excel ẩn
@@ -361,6 +369,20 @@ def write_all_groups(classified_data, output_dir, mm, yyyy, log_callback, progre
                 wb.Save()
                 log_callback(f"   ✅ Đã lưu: {filename}")
                 processed += 1
+                
+                # ✨ NEW: Lưu metadata cho file này
+                # Tạo đường dẫn relative từ output_dir để dễ đọc
+                if sub_folder:
+                    relative_path = os.path.join(sub_folder, filename)
+                else:
+                    relative_path = filename
+                    
+                metadata["mapping"][relative_path] = {
+                    "template": template_key,
+                    "group_name": to_name,
+                    "employee_count": len(employees),
+                    "folder": sub_folder or "root"
+                }
 
             except Exception as e:
                 log_callback(f"   ❌ Lỗi xử lý {filename}: {e}")
@@ -378,6 +400,21 @@ def write_all_groups(classified_data, output_dir, mm, yyyy, log_callback, progre
             # Cập nhật tiến độ
             if progress_callback:
                 progress_callback(int(((processed) / total) * 100))
+
+        # ✨ Lưu metadata vào centralized location (04_data)
+        try:
+            from utils.paths import get_metadata_path
+            centralized_metadata_path = get_metadata_path(yyyy, mm)
+            centralized_metadata_dir = os.path.dirname(centralized_metadata_path)
+            
+            os.makedirs(centralized_metadata_dir, exist_ok=True)
+            with open(centralized_metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+            
+            log_callback(f"\n✨ Đã lưu metadata: {centralized_metadata_path}")
+
+        except Exception as e:
+            log_callback(f"\n⚠️ Cảnh báo: Không thể lưu metadata: {e}")
 
         if progress_callback:
             progress_callback(100)
