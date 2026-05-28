@@ -138,12 +138,35 @@ class ScanProductionWidget(QWidget):
         self.table_batch.setHorizontalHeaderLabels(["STT", "Thư mục con (Mã)", "Số ảnh", "Thưởng mã (%)", "Trạng thái", "Hành động"])
         
         header = self.table_batch.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        # header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        # header.setSectionResizeMode(1, QHeaderView.Stretch)
+        # header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        # header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        # header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        # header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        # STT
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table_batch.setColumnWidth(0, 0)
+
+        # Thư mục con
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+
+        # Số ảnh
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.table_batch.setColumnWidth(2, 70)
+
+        # Thưởng mã
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
+        self.table_batch.setColumnWidth(3, 120)
+
+        # Trạng thái
+        header.setSectionResizeMode(4, QHeaderView.Fixed)
+        self.table_batch.setColumnWidth(4, 100)
+
+        # Hành động
+        header.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.table_batch.setColumnWidth(5, 120)
+
         right_layout.addWidget(self.table_batch, stretch=3)
         
         # Nút bắt đầu Batch OCR

@@ -8,6 +8,7 @@ from ui.tab0_template_config.column_config_widget import ColumnConfigWidget
 from ui.tab1_split.split_widget import SplitExcelWidget
 from ui.tab2_scan.scan_widget import ScanProductionWidget
 from ui.tab3_link.link_widget import LinkExcelWidget
+from ui.tab5_salary_deploy.salary_widget import SalaryDeployWidget
 
 class MainWindow(QMainWindow):
     """
@@ -19,7 +20,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Idol Linh tính lương")
         self.setGeometry(100, 100, 1000, 750)
         self.setWindowIcon(QIcon("app_icon.png"))
-        self.showMaximized() # Mở to toàn màn hình
         
         # Widget trung tâm và Layout chính
         central_widget = QWidget()
@@ -36,14 +36,16 @@ class MainWindow(QMainWindow):
         # Khởi tạo các Tab (mỗi tab là một module riêng biệt)
         self.tab0 = ColumnConfigWidget()     # Tab 1: Cấu hình danh sách tiêu đề cột Template
         self.tab1 = SplitExcelWidget()       # Tab 2: Xử lý tách danh sách nhân viên theo tổ
-        self.tab2 = ScanProductionWidget()   # Tab 3: Scan ảnh bảng sản lượng bằng AI (Gemini)
+        self.tab2 = ScanProductionWidget()   # Tab 3: Quét ảnh bảng sản lượng bằng AI (Gemini)
         self.tab3 = LinkExcelWidget()        # Tab 4: Tích hợp dữ liệu JSON đã scan vào các file Excel
+        self.tab5 = SalaryDeployWidget()     # Tab 5: Triển khai công thức lương với linking dữ liệu
         
         # Thêm các tab vào TabWidget
-        self.tabs.addTab(self.tab0, "1. Cài Đặt Cột Template")
+        self.tabs.addTab(self.tab0, "1. Cập Nhật Mẫu")
         self.tabs.addTab(self.tab1, "2. Tách File Nhân Viên")
-        self.tabs.addTab(self.tab2, "3. Scan Ảnh Sản Lượng")
-        self.tabs.addTab(self.tab3, "4. Tích Hợp Excel")
+        self.tabs.addTab(self.tab2, "3. Quét Ảnh Sản Lượng")
+        self.tabs.addTab(self.tab3, "4. Tích Hợp Sản Lượng")
+        self.tabs.addTab(self.tab5, "5. Triển Khai Lương")
         
         # Tùy chỉnh giao diện CSS cho các Tab (Tab Styling)
         self.tabs.setStyleSheet("""

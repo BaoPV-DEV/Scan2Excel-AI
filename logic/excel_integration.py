@@ -422,8 +422,15 @@ def process_excel_integration(json_folder, excel_target_folder, log_callback, pr
                         external_ids = {m.upper() for m in sorted_external}
 
                         # Duyệt qua các dòng từ 9 đến 267, bước nhảy 2 dòng
+                        # Check cột B (họ tên) + C (mã NV), dừng nếu cả 2 trống
                         for r in range(9, 268, 2):
+                            ten_nv = str(ws_source.Cells(r, 2).Value or "").strip()
                             ma_nv = str(ws_source.Cells(r, 3).Value or "").strip().replace(".0", "")
+                            
+                            # Nếu cả cột B (tên) và C (mã) đều trống, dừng (tối ưu tài nguyên)
+                            if not ten_nv and not ma_nv:
+                                break
+                            
                             if not ma_nv:
                                 # Nếu ô mã NV trống, xóa trắng các cột F:AC ở dòng này
                                 for col in range(6, 30):
@@ -560,8 +567,15 @@ def process_excel_integration(json_folder, excel_target_folder, log_callback, pr
                                 core_ids = {nv["ma"].upper(): nv for nv in core_org_list if nv.get("ma")}
 
                                 # Duyệt qua các dòng từ 9 đến 267, bước nhảy 2 dòng
+                                # Check cột B (họ tên) + C (mã NV), dừng nếu cả 2 trống
                                 for r in range(9, 268, 2):
+                                    ten_nv = str(ws_source.Cells(r, 2).Value or "").strip()
                                     ma_nv = str(ws_source.Cells(r, 3).Value or "").strip().replace(".0", "")
+                                    
+                                    # Nếu cả cột B (tên) và C (mã) đều trống, dừng (tối ưu tài nguyên)
+                                    if not ten_nv and not ma_nv:
+                                        break
+                                    
                                     if not ma_nv:
                                         for col in range(6, 30):
                                             ws_source.Cells(r, col).Value = None

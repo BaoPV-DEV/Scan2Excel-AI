@@ -29,9 +29,9 @@ class ColumnConfigWidget(QWidget):
         # Bắt buộc QWidget vẽ nền stylesheet (quan trọng để có nền trắng full màn hình)
         self.setAttribute(Qt.WA_StyledBackground, True)
         
-        # Xác định đường dẫn file cấu hình JSON lưu trữ
-        current_dir = os.path.abspath(os.path.dirname(__file__))
-        self.config_path = os.path.abspath(os.path.join(current_dir, "..", "..", "Template", "sx", "template_columns.json"))
+        # Xác định đường dẫn file cấu hình JSON lưu trữ (centralized)
+        from utils.paths import get_template_columns_path
+        self.config_path = get_template_columns_path()
         
         # Tải danh sách cột
         self.columns = []

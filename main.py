@@ -7,11 +7,23 @@ setup_logger()
 from PySide6.QtWidgets import QApplication
 from ui.gui import MainWindow
 from utils.config import load_config
+import debugpy
 
 import ctypes
 from PySide6.QtGui import QIcon
 
 def main():
+    debugpy.listen(("localhost", 5678))
+
+    print("Debugger ready")
+    
+    # Thực hiện di chuyển cấu hình cũ sang thư mục ẩn
+    try:
+        from utils.paths import migrate_configs_to_hidden_dir
+        migrate_configs_to_hidden_dir()
+    except Exception as e:
+        print(f"⚠️ Lỗi khi chạy migration cấu hình: {e}")
+    
     # Sửa lỗi Icon ở Taskbar trên Windows (để app có icon riêng thay vì icon Python mặc định)
     myappid = 'sd.scan2excel.ai.1' 
     try:
@@ -30,7 +42,7 @@ def main():
     
     # Khởi tạo và hiển thị giao diện người dùng chính
     window = MainWindow()
-    window.show()
+    window.showMaximized()  # Hiển thị cửa sổ ở trạng thái maximize
     
     # Bắt đầu vòng lặp sự kiện của ứng dụng
     sys.exit(app.exec())

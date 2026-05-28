@@ -136,18 +136,36 @@ class DataEditorDialog(QDialog):
                 self.update_worker_cell(row, dialog.get_workers())
 
     def add_step(self):
-        # Thêm một hàng công đoạn mới
-        row = self.table.rowCount()
+        # Thêm một hàng công đoạn mới tại vị trí được chọn
+        current_row = self.table.currentRow()
+        
+        # Nếu không có hàng được chọn, thêm vào cuối
+        if current_row < 0:
+            row = self.table.rowCount()
+        else:
+            # Chèn hàng mới ngay sau hàng được chọn
+            row = current_row + 1
+        
         self.table.insertRow(row)
+        
+        # Cập nhật dữ liệu cho hàng mới
         self.table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
         self.table.setItem(row, 1, QTableWidgetItem("Mới"))
         self.table.setItem(row, 2, QTableWidgetItem("0.0"))
         self.update_worker_cell(row, [])
+        
+        # Cập nhật lại STT cho tất cả hàng sau hàng được thêm
+        for r in range(row + 1, self.table.rowCount()):
+            self.table.setItem(r, 0, QTableWidgetItem(str(r + 1)))
 
     def remove_step(self):
         # Xóa công đoạn đang chọn
         curr = self.table.currentRow()
-        if curr >= 0: self.table.removeRow(curr)
+        if curr >= 0:
+            self.table.removeRow(curr)
+            # Cập nhật lại STT cho tất cả hàng sau hàng bị xóa
+            for r in range(curr, self.table.rowCount()):
+                self.table.setItem(r, 0, QTableWidgetItem(str(r + 1)))
 
     def get_updated_data(self):
         # Thu thập toàn bộ dữ liệu đã sửa để trả về

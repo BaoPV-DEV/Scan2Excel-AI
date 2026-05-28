@@ -156,7 +156,8 @@ class LinkExcelWidget(QWidget):
                 QMessageBox.warning(self, "Lỗi", "Không thể xác định tên Tổ từ thư mục đã chọn.")
                 return
 
-        json_root = os.path.join("D:/Linh_Salary_Tool", "02_ma_hang", year, month)
+        from utils.paths import get_base_path
+        json_root = os.path.join(get_base_path(), "02_ma_hang", year, month)
         excel_dir = get_split_excel_path(year, month)
 
         if not os.path.exists(json_root):
