@@ -24,11 +24,11 @@ def update_templates_with_headers(titles, log_callback, progress_callback=None):
 
     # Xác định đường dẫn tuyệt đối của các template
     logic_dir = os.path.abspath(os.path.dirname(__file__))
-    workspace_dir = os.path.abspath(os.path.join(logic_dir, ".."))
+    workspace_dir = os.path.abspath(os.path.join(logic_dir, "../.."))
     
     template_paths = {
-        "Tổ May Template": os.path.join(workspace_dir, "Template", "sx", "to_may_template.xlsx"),
-        "Kiểm Hóa Template": os.path.join(workspace_dir, "Template", "sx", "kiem_hoa_template.xlsx")
+        "Tổ May Template": os.path.join(workspace_dir, "resources", "templates", "sx", "to_may_template.xlsx"),
+        "Kiểm Hóa Template": os.path.join(workspace_dir, "resources", "templates", "sx", "kiem_hoa_template.xlsx")
     }
 
     # Kiểm tra sự tồn tại của file

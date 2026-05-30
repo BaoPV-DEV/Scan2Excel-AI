@@ -1,12 +1,12 @@
 import sys
 from app.utils.logger import setup_logger
+from app.utils.paths import resource_path
 
 # Phải gọi setup_logger TRƯỚC khi import bất kỳ module nào khác có sử dụng logging
 setup_logger()
 
 from PySide6.QtWidgets import QApplication
 from app.ui.gui import MainWindow
-from app.utils.config import load_config, resource_path
 import ctypes
 from PySide6.QtGui import QIcon
 
@@ -19,8 +19,6 @@ def main():
     except Exception:
         pass
         
-    # Tải cấu hình từ file .env hoặc config (nếu có)
-    config = load_config()
     
     # Khởi tạo ứng dụng PySide6
     app = QApplication(sys.argv)

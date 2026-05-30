@@ -7,7 +7,14 @@ import numpy as np
 # ==============================================================================
 
 # Đường dẫn gốc tới thư mục Template (tương đối từ thư mục gốc project)
-TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Template")
+TEMPLATE_DIR = os.path.normpath(
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 
+        "../..", 
+        "resources", 
+        "templates"
+    )
+)
 
 # Các tổ sản xuất dùng to_may_template
 TO_MAY_GROUPS = ["tổ 1","tổ 2","tổ 3","tổ 4","tổ 5","tổ 6","tổ 7","tổ 8","tổ 9","tổ 10","tổ 11","tổ 12"]
