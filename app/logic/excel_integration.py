@@ -2,17 +2,21 @@ import gc
 import json
 import os
 import re
-import time
 import pythoncom
 import win32com.client as win32
 from dotenv import load_dotenv
+from functools import lru_cache
 
-
+# =========================================================
+# 1. NORMALIZE (CACHE để giảm CPU)
+# =========================================================
+@lru_cache(maxsize=5000)
 def normalize_str(s):
+    """Chuẩn hóa chuỗi (bỏ dấu + lowercase + trim)"""
     if not s:
         return ""
     s = str(s).strip().lower()
-    # Loại bỏ dấu tiếng Việt và chuẩn hóa ký tự
+
     s = re.sub(r'[àáạảãâầấậẩẫăằắặẳẵ]', 'a', s)
     s = re.sub(r'[èéẹẻẽêềếệểễ]', 'e', s)
     s = re.sub(r'[ìíịỉĩ]', 'i', s)
@@ -21,714 +25,322 @@ def normalize_str(s):
     s = re.sub(r'[ỳýỵỷỹ]', 'y', s)
     s = re.sub(r'[đ]', 'd', s)
     s = re.sub(r'\s+', ' ', s)
+
     return s
 
+# =========================================================
+# 2. MATCH TEAM LOGIC
+# =========================================================
 def teams_match(norm_json, norm_header):
+    """So sánh tên tổ đã normalize"""
     if norm_json == norm_header:
         return True
-    # Ánh xạ đặc biệt (bí danh)
+
     if norm_header in ["co dong", "dieu dong"] and norm_json in ["co dong", "dieu dong"]:
         return True
+
     if norm_header in ["hoan thien", "h.thien"] and norm_json in ["hoan thien", "h.thien"]:
         return True
+
     return False
 
+# =========================================================
+# 3. FORMAT HEADER MERGED CELLS
+# =========================================================
 def ensure_merged_headers_format(wb):
-    """
-    Đảm bảo định dạng cho các ô tiêu đề đã merge (R4:R7, S4:S7, T4:T7) trong sheet 'Tong hop cac ma'.
-    Excel COM có thể bị mất định dạng của ô góc trên bên trái (R4, S4, T4) sau khi lưu nếu không được gán tường minh.
-    """
+    """Fix format cho header merge trong Excel"""
     try:
-        ws_tong_hop = None
+        ws = None
         for s in wb.Sheets:
             if s.Name == "Tong hop cac ma":
-                ws_tong_hop = s
+                ws = s
                 break
-        
-        if ws_tong_hop:
-            try: ws_tong_hop.Unprotect()
-            except: pass
-            
-            cells_to_format = ["R4", "S4", "T4"]
-            for cell_ref in cells_to_format:
-                cell = ws_tong_hop.Range(cell_ref)
-                cell.HorizontalAlignment = -4108 # xlCenter
-                cell.VerticalAlignment = -4108   # xlCenter
-                cell.Font.Bold = True
-                cell.WrapText = True
-                cell.Interior.Color = 65535      # Yellow
-                cell.Font.Color = 255            # Red
-    except Exception:
+
+        if ws:
+            try:
+                ws.Unprotect()
+            except:
+                pass
+
+            for cell in ["R4", "S4", "T4"]:
+                c = ws.Range(cell)
+                c.HorizontalAlignment = -4108  # xlCenter
+                c.VerticalAlignment = -4108    # xlCenter
+                c.Font.Bold = True
+                c.WrapText = True
+                c.Interior.Color = 65535       # Yellow
+                c.Font.Color = 255             # Red
+    except:
         pass
 
+# =========================================================
+# 4. MAIN ENGINE (WITH INTENSE DEBUG LOGS)
+# =========================================================
+def process_excel_integration(json_folder, excel_target_folder, log_callback,
+                             progress_callback=None, excel_pass="", single_dept=None):
 
-def process_excel_integration(json_folder, excel_target_folder, log_callback, progress_callback=None, excel_pass="", single_dept=None):
-    # Cấu hình mật khẩu
     load_dotenv()
     EXCEL_PASS = excel_pass or os.getenv("EXCEL_SHEET_PASSWORD", "8863")
 
-    # 1. Thu thập và nhóm các file JSON theo file Excel đích
+    log_callback(f"[DEBUG START] Gốc JSON: {json_folder}")
+    log_callback(f"[DEBUG START] Thư mục Excel: {excel_target_folder}")
+    log_callback(f"[DEBUG START] Bộ lọc đơn tổ (single_dept): {single_dept}")
+
+    norm_single_dept = normalize_str(single_dept) if single_dept else None
+
+    # ================================
+    # 1. LOAD JSON FILES
+    # ================================
     json_paths = []
     for root, _, files in os.walk(json_folder):
         for f in files:
-            if f.lower().endswith(".json"):
+            if f.endswith(".json"):
                 json_paths.append(os.path.join(root, f))
 
+    log_callback(f"[DEBUG] Tổng số file JSON tìm thấy trên ổ đĩa: {len(json_paths)}")
     if not json_paths:
-        return False, "Không tìm thấy file JSON nào."
+        return False, "Không tìm thấy JSON"
 
     excel_groups = {}
     employee_dept_giay = {}
+
+    # ================================
+    # 2. GROUP JSON → EXCEL & TÍNH TỔNG GIÂY
+    # ================================
     for jp in json_paths:
         try:
             with open(jp, "r", encoding="utf-8") as f:
                 data = json.load(f)
+
             info = data.get("thong_tin_chung", {})
             to_sx = str(info.get("to_san_xuat", "")).strip()
-            if to_sx.isdigit(): to_sx = f"Tổ {to_sx}"
+            if to_sx.isdigit():
+                to_sx = f"Tổ {to_sx}"
+
             to_sx_upper = to_sx.upper()
-            
-            # Tính toán Giây ngoài tổ cho tất cả file JSON (để fill sang các tổ khác)
+            norm_to_sx = normalize_str(to_sx_upper)
+
+            # Lọc đơn tổ (nếu có)
+            if norm_single_dept and not teams_match(norm_to_sx, norm_single_dept):
+                continue
+
             thuong = float(info.get("thuong_ma_hang_moi", 0)) / 100.0
-            for cd in data.get("danh_sach_cong_doan", []):
+            
+            # Đếm log số công đoạn
+            cong_doan_list = data.get("danh_sach_cong_doan", [])
+
+            for cd in cong_doan_list:
                 dinh_muc = float(cd.get("dinh_muc_t", 0))
-                if dinh_muc <= 0: continue
+                if dinh_muc <= 0:
+                    continue
+
                 for th in cd.get("thuc_hien", []):
                     m_id = str(th.get("ma_nhan_vien", "")).strip().replace(".0", "")
                     sl = float(th.get("so_luong", 0))
+
                     if m_id and sl > 0:
+                        giay = (sl * dinh_muc / 100.0) * (1 + thuong)
+
                         if m_id not in employee_dept_giay:
                             employee_dept_giay[m_id] = {}
-                        giay = (sl * dinh_muc / 100.0) * (1 + thuong)
-                        employee_dept_giay[m_id][to_sx_upper] = employee_dept_giay[m_id].get(to_sx_upper, 0.0) + giay
 
-            # Lọc theo single_dept nếu người dùng chọn chạy 1 tổ
-            if single_dept and single_dept.upper() != to_sx_upper:
+                        employee_dept_giay[m_id][to_sx_upper] = \
+                            employee_dept_giay[m_id].get(to_sx_upper, 0) + giay
+
+            # Định vị file Excel
+            match = re.search(r"(\d{2})/(\d{4})", str(info.get("thoi_gian", "")))
+            if not match:
+                log_callback(f"[WARNING] File JSON {os.path.basename(jp)} sai định dạng 'thoi_gian'")
                 continue
 
-            match = re.search(r"(\d{2})/(\d{4})", str(info.get("thoi_gian", "")))
-            if not match: continue
-            
             mm = match.group(1)
             excel_name = f"{to_sx} - {mm}.xlsx"
-            
-            # Xác định thư mục 'sx' theo cách thông minh và chống lỗi
-            sx_folder = excel_target_folder
-            base_name = os.path.basename(excel_target_folder.rstrip("\\/")).lower()
-            if base_name != "sx":
-                potential_sx = os.path.join(excel_target_folder, "sx")
-                if os.path.exists(potential_sx) or not os.path.exists(excel_target_folder):
-                    sx_folder = potential_sx
-                
-            target_path = os.path.abspath(os.path.join(sx_folder, excel_name))
-            
-            if target_path not in excel_groups: excel_groups[target_path] = []
-            excel_groups[target_path].append({"path": jp, "data": data, "to_sx_upper": to_sx_upper})
-        except: continue
+            target_path = os.path.abspath(os.path.join(excel_target_folder, excel_name))
 
-    # Lấy thông tin tháng và năm từ bất kỳ file JSON nào hợp lệ
-    mm = None
-    yyyy = None
-    for jp in json_paths:
-        try:
-            with open(jp, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            info = data.get("thong_tin_chung", {})
-            match = re.search(r"(\d{2})/(\d{4})", str(info.get("thoi_gian", "")))
-            if match:
-                mm = match.group(1)
-                yyyy = match.group(2)
-                break
-        except:
+            excel_groups.setdefault(target_path, []).append({
+                "path": jp,
+                "data": data,
+                "to_sx_upper": to_sx_upper
+            })
+
+        except Exception as e:
+            log_callback(f"[ERROR] Lỗi phân tích JSON {os.path.basename(jp)}: {e}")
             continue
 
-    # Tính toán tổng số mã hàng để cập nhật tiến độ chính xác
-    total_mh_count = sum(len(items) for items in excel_groups.values())
-    
-    # 2. Khởi tạo ứng dụng Excel
+    log_callback(f"[DEBUG] Số nhóm file Excel đích sẽ xử lý: {len(excel_groups)}")
+    for k, v in excel_groups.items():
+        log_callback(f"   -> Excel: {os.path.basename(k)} (Gồm {len(v)} item hàng)")
+
+    if not excel_groups:
+        return False, "Không có dữ liệu phù hợp để tích hợp (Có thể do bộ lọc Tổ trống)"
+
+    # ================================
+    # 3. INIT EXCEL COM
+    # ================================
     pythoncom.CoInitialize()
     excel_app = None
+
     processed_count = 0
-    processed_file_count = 0  # ✅ Thêm counter để track file xử lý (cho Case 2)
-    total_files = len(json_paths)
+    total_work = sum(len(v) for v in excel_groups.values())
 
     try:
         excel_app = win32.DispatchEx("Excel.Application")
         excel_app.Visible = False
-        excel_app.DisplayAlerts = False  
-        excel_app.ScreenUpdating = False 
+        excel_app.DisplayAlerts = False
+        excel_app.ScreenUpdating = False
 
-        # Xác định tất cả các file Excel đích của tháng này (scan cả 'sx' và 'gt')
-        import glob
-        excel_files_in_folder = []
-        if mm:
-            # Scan folder 'sx' và 'gt'
-            for subfolder in ['sx', 'gt']:
-                target_folder = excel_target_folder
-                base_name = os.path.basename(excel_target_folder.rstrip("\\/")).lower()
-                
-                if base_name not in ['sx', 'gt']:
-                    potential_folder = os.path.join(excel_target_folder, subfolder)
-                    if os.path.exists(potential_folder):
-                        target_folder = potential_folder
-                    elif os.path.exists(excel_target_folder):
-                        target_folder = excel_target_folder
-                
-                pattern = os.path.abspath(os.path.join(target_folder, f"* - {mm}.xlsx"))
-                excel_files_in_folder.extend([f for f in glob.glob(pattern) if not os.path.basename(f).startswith("~$")])
+        all_paths = list(excel_groups.keys())
 
-        # Lọc nếu chạy cho 1 tổ
-        if single_dept:
-            single_dept_norm = normalize_str(single_dept)
-            filtered_files = []
-            for f in excel_files_in_folder:
-                base = os.path.basename(f)
-                to_sx_part = base.split(" - ")[0]
-                if normalize_str(to_sx_part) == single_dept_norm:
-                    filtered_files.append(f)
-            excel_files_in_folder = filtered_files
-
-        # Tập hợp tất cả các file Excel cần xử lý (gồm cả có JSON và không có JSON)
-        # Chuẩn hóa đường dẫn để tránh sai khác chữ hoa/thường trên Windows
-        normalized_excel_groups = {os.path.normpath(os.path.normcase(k)): v for k, v in excel_groups.items()}
-        normalized_files_in_folder = {os.path.normpath(os.path.normcase(f)) for f in excel_files_in_folder}
-        
-        all_excel_paths = sorted(list(normalized_excel_groups.keys() | normalized_files_in_folder))
-
-        # Khử trùng lặp: Nếu cùng 1 tên file xuất hiện ở cả thư mục con (sx/gt) và thư mục gốc,
-        # chỉ giữ lại bản ghi trong thư mục con để cập nhật trực tiếp tại đó, tránh xử lý trùng.
-        unique_paths = {}
-        for path in all_excel_paths:
-            filename = os.path.basename(path).lower()
-            if filename not in unique_paths:
-                unique_paths[filename] = path
-            else:
-                old_path = unique_paths[filename]
-                old_is_sub = ("\\sx\\" in old_path.lower() or "/sx/" in old_path.lower() or 
-                              "\\gt\\" in old_path.lower() or "/gt/" in old_path.lower())
-                new_is_sub = ("\\sx\\" in path.lower() or "/sx/" in path.lower() or 
-                              "\\gt\\" in path.lower() or "/gt/" in path.lower())
-                if new_is_sub and not old_is_sub:
-                    unique_paths[filename] = path
-        
-        all_excel_paths = sorted(list(unique_paths.values()))
-        
-        # ✅ Tính tổng work items: mã hàng + SX file không có JSON (skip GT files)
-        num_files_no_json = 0
-        for excel_path in all_excel_paths:
-            if excel_path not in normalized_excel_groups:
-                # Chỉ count SX files
-                is_sx_file = "\\sx\\" in excel_path.lower() or "/sx/" in excel_path.lower() or "tổ" in os.path.basename(excel_path).lower()
-                if is_sx_file:
-                    num_files_no_json += 1
-        
-        total_work_items = total_mh_count + num_files_no_json
-
-        for idx, excel_path in enumerate(all_excel_paths):
+        # ================================
+        # 4. PROCESS EACH EXCEL FILE
+        # ================================
+        for excel_path in all_paths:
+            log_callback(f"\n[EXCEL] Bắt đầu mở file: {os.path.basename(excel_path)}")
             if not os.path.exists(excel_path):
-                log_callback(f"❌ Không tìm thấy file: {os.path.basename(excel_path)}")
+                log_callback(f"[ERROR] KHÔNG TÌM THẤY FILE TRÊN ĐĨA: {excel_path}")
                 continue
 
             wb = None
-            # Trường hợp 1: File Excel có JSON sản lượng đi kèm
-            if excel_path in normalized_excel_groups:
-                items = normalized_excel_groups[excel_path]
-                log_callback(f"\n📂 Bắt đầu xử lý file: {os.path.basename(excel_path)}")
-                try:
-                    wb = excel_app.Workbooks.Open(excel_path, UpdateLinks=0, ReadOnly=False, Password=EXCEL_PASS)
-                except:
-                    wb = excel_app.Workbooks.Open(excel_path)
+            try:
+                wb = excel_app.Workbooks.Open(excel_path)
+                ensure_merged_headers_format(wb)
 
                 try:
-                    # --- Mở khóa Workbook ---
-                    try: wb.Unprotect(Password=EXCEL_PASS)
-                    except:
-                        try: wb.Unprotect()
-                        except: pass
-
-                    # Kiểm tra file có phải "Kiểm hóa" không
-                    is_kiem_hoa = "kiem" in os.path.basename(excel_path).lower()
-                    
-                    # Đối với "Kiểm hóa", không xử lý JSON (chỉ cập nhật từ "Danh sách")
-                    if is_kiem_hoa:
-                        log_callback(f"⚠️ File 'Kiểm hóa': Xử lý sẽ được thực hiện ở Case 2 (không có JSON)")
-                        wb.Close()
-                        continue
-
-                    ws_source = wb.Sheets("Bang TH nop")
-                    ws_template = wb.Sheets("xxx")
-
-                    # =========================================================
-                    # BƯỚC 1: LẤY DANH SÁCH TỔ CHUẨN (ƯU TIÊN SHEET "DANH SÁCH")
-                    # =========================================================
-                    log_callback("🔎 Đang xác định danh sách Tổ chuẩn...")
-                    core_org_list = []
-                    seen_ids_in_org = set()
-                    
-                    # Thử đọc từ sheet "Danh sách" trước
-                    ws_ds = None
-                    for s in wb.Sheets:
-                        if s.Name == "Danh sách":
-                            ws_ds = s
-                            break
-                    
-                    if ws_ds:
-                        log_callback("✅ Lấy danh sách từ sheet 'Danh sách'")
-                        l_row_nv = ws_ds.Cells(ws_ds.Rows.Count, 4).End(-4162).Row
-                        for r in range(2, l_row_nv + 1):
-                            ma = str(ws_ds.Cells(r, 4).Value or "").strip().replace(".0", "")
-                            ten = str(ws_ds.Cells(r, 5).Value or "").strip()
-                            if ma and ten and ma not in seen_ids_in_org:
-                                core_org_list.append({"ma": ma, "ten": ten})
-                                seen_ids_in_org.add(ma)
-                    else:
-                        log_callback("ℹ️ Chưa có sheet 'Danh sách', lấy từ 'Bang TH nop'")
-                        last_row_src = ws_source.Cells(ws_source.Rows.Count, 3).End(-4162).Row
-                        for r in range(9, last_row_src + 1, 2):
-                            ma = str(ws_source.Cells(r, 3).Value or "").strip().replace(".0", "")
-                            ten = str(ws_source.Cells(r, 2).Value or "").strip()
-                            if ten == "0": ten = ""
-                            if ma and ten and len(ma) <= 20 and ma not in seen_ids_in_org:
-                                core_org_list.append({"ma": ma, "ten": ten})
-                                seen_ids_in_org.add(ma)
-
-                    # Thu thập thông tin nhân viên từ JSON (CHỈ LẤY MÃ, BỎ TÊN NGOÀI TỔ)
-                    all_involved_external_ids = set()
-                    mh_involved_map = {} 
-                    
-                    for item in items:
-                        data_mh = item["data"]
-                        ma_h = str(data_mh.get("thong_tin_chung", {}).get("ma_hang", "UNKNOWN")).strip()
-                        mh_involved_map[ma_h] = set()
-                        
-                        for cd in data_mh.get("danh_sach_cong_doan", []):
-                            for th in cd.get("thuc_hien", []):
-                                m_id = str(th.get("ma_nhan_vien", "")).strip().replace(".0", "")
-                                if m_id and m_id.upper() != "N/A" and len(m_id) <= 20:
-                                    if m_id not in seen_ids_in_org:
-                                        all_involved_external_ids.add(m_id)
-                                    mh_involved_map[ma_h].add(m_id)
-
-                    # Master List duy nhất (Tổ có tên, Ngoài tổ để trống tên)
-                    sorted_external = sorted(list(all_involved_external_ids))
-                    final_full_list = core_org_list + [{"ma": m, "ten": ""} for m in sorted_external]
-                    master_row_lookup = {nv["ma"]: 9 + idx*2 for idx, nv in enumerate(final_full_list)}
-
-                    # =========================================================
-                    # BƯỚC 2: XỬ LÝ CHI TIẾT TỪNG MÃ HÀNG
-                    # =========================================================
-                    mapping_all_mh = {} 
-                    
-                    for item in items:
-                        data = item["data"]
-                        info = data.get("thong_tin_chung", {})
-                        ma_hang = str(info.get("ma_hang", "UNKNOWN")).strip()
-                        log_callback(f"  > Đang xử lý mã hàng: {ma_hang}")
-
-                        ext_ids_this_mh = [m for m in mh_involved_map.get(ma_hang, []) if m not in seen_ids_in_org]
-                        local_nv_list = core_org_list + [{"ma": m, "ten": ""} for m in ext_ids_this_mh]
-                        
-                        safe_name = re.sub(r'[\\/*?:\[\]]', '_', ma_hang)[:31]
-                        for s in wb.Sheets:
-                            if s.Name.upper() == safe_name.upper():
-                                try: s.Delete()
-                                except: pass
-                                break
-                        
-                        ws_new = wb.Sheets.Add(Before=wb.Sheets(1))
-                        ws_template.Cells.Copy()
-                        ws_new.Range("A1").PasteSpecial(-4104)
-                        ws_new.Range("A1").PasteSpecial(8)
-                        excel_app.CutCopyMode = False 
-                        ws_new.Name = safe_name
-                        ws_new.Tab.ColorIndex = 4
-
-                        ws_new.Cells(1, 2).Value = ma_hang
-                        ws_new.Cells(2, 2).Value = info.get("tong_san_luong_muc_tieu", 0)
-                        ws_new.Cells(1, 3).Value = f"BẢNG LƯƠNG {info.get('thoi_gian', '')} Tổ {info.get('to_san_xuat', '')}".upper()
-
-                        stt_col_map = {}
-                        for cd in data.get("danh_sach_cong_doan", []):
-                            stt = int(cd.get("stt", 0))
-                            col = 5 + stt
-                            ws_new.Cells(6, col).Value = cd.get("dinh_muc_t", 0)
-                            stt_col_map[stt] = col
-
-                        local_row_lookup = {}
-                        r_curr = 9
-                        for nv in local_nv_list:
-                            ws_new.Cells(r_curr, 1).Value = (r_curr - 9) // 2 + 1
-                            ws_new.Cells(r_curr, 2).Value = nv["ten"]
-                            ws_new.Cells(r_curr, 3).Value = nv["ma"]
-                            ws_new.Cells(r_curr, 4).Formula = f"=SUMPRODUCT(F{r_curr}:HE{r_curr},$F$6:$HE$6)/100"
-                            local_row_lookup[nv["ma"]] = r_curr
-                            r_curr += 2
-
-                        for cd in data.get("danh_sach_cong_doan", []):
-                            col = stt_col_map.get(int(cd.get("stt", 0)))
-                            if not col: continue
-                            for th in cd.get("thuc_hien", []):
-                                m_id = str(th.get("ma_nhan_vien", "")).strip().replace(".0", "")
-                                sl = th.get("so_luong", 0)
-                                if m_id in local_row_lookup and sl > 0:
-                                    tr = local_row_lookup[m_id]
-                                    ws_new.Cells(tr, col).Value = (ws_new.Cells(tr, col).Value or 0) + sl
-                                    ws_new.Cells(tr, col).NumberFormat = "#,##0"
-
-                        mapping_all_mh[ma_hang] = local_row_lookup
-                        processed_count += 1
-                        
-                        # ✅ Cập nhật tiến độ dựa trên tổng work items (mã hàng + file)
-                        if progress_callback and total_work_items > 0:
-                            progress_callback(int((processed_count / total_work_items) * 100))
-
-                    # =========================================================
-                    # BƯỚC 3: CẬP NHẬT SHEET TỔNG HỢP
-                    # =========================================================
-                    log_callback("📊 Đang cập nhật Sheet Tổng hợp...")
-                    try:
-                        ws_tong_hop = None
-                        for s in wb.Sheets:
-                            if s.Name in ["Tong hop cac ma", "Kiểm hóa may"]:
-                                ws_tong_hop = s
-                                break
-                        if not ws_tong_hop:
-                            raise ValueError("Không tìm thấy sheet tổng hợp (Tong hop cac ma hoặc Kiểm hóa may)")
-                        
-                        # Unprotect sheet trước khi sửa
-                        try: ws_tong_hop.Unprotect(Password=EXCEL_PASS)
-                        except: pass
-                        
-                        ws_tong_hop.Range("A9:Q1000").ClearContents()
-                        # Không xóa trắng vùng Header (3-7) để giữ định dạng Merged Cells của R,S,T
-                        
-                        info_last = items[-1]["data"]["thong_tin_chung"]
-                        ws_tong_hop.Cells(2, 1).Value = f"BẢNG TỔNG HỢP GIÂY {info_last.get('thoi_gian', '').upper()} - TỔ {str(info_last.get('to_san_xuat', '')).upper()}"
-                        
-                        for nv in final_full_list:
-                            r_m = master_row_lookup[nv["ma"]]
-                            ws_tong_hop.Cells(r_m, 1).Value = (r_m - 9) // 2 + 1
-                            ws_tong_hop.Cells(r_m, 2).Value = nv["ten"]
-                            ws_tong_hop.Cells(r_m, 3).Value = nv["ma"]
-
-                        for idx, item in enumerate(items):
-                            c_idx = 4 + idx
-                            if c_idx > 17: break # Chỉ điền đến cột Q
-                            info_mh = item["data"]["thong_tin_chung"]
-                            mh_name = info_mh.get("ma_hang", "")
-                            safe_n = re.sub(r'[\\/*?:\[\]]', '_', mh_name)[:31]
-                            
-                            ws_tong_hop.Cells(3, c_idx).Value = info_mh.get("thuong_ma_hang_moi", 0) / 100
-                            ws_tong_hop.Cells(3, c_idx).NumberFormat = "0%"
-                            ws_tong_hop.Cells(4, c_idx).Value = mh_name
-                            ws_tong_hop.Cells(5, c_idx).Value = info_mh.get("tong_san_luong_muc_tieu", 0)
-                            ws_tong_hop.Cells(7, c_idx).Value = f"M{idx+1}"
-                            
-                            local_map = mapping_all_mh.get(mh_name, {})
-                            for nv in final_full_list:
-                                r_m = master_row_lookup[nv["ma"]]
-                                if nv["ma"] in local_map:
-                                    ws_tong_hop.Cells(r_m, c_idx).Formula = f"='{safe_n}'!D{local_map[nv['ma']]}"
-                                else:
-                                    ws_tong_hop.Cells(r_m, c_idx).Value = 0
-
-                        # Cột R, S, T giữ nguyên công thức có sẵn trong template
-                        pass
-
-                        
-                    except Exception as ex:
-                        log_callback(f"⚠️ Lỗi cập nhật tổng hợp: {ex}")
-
-                    # =========================================================
-                    # BƯỚC 4: CẬP NHẬT SHEET "BANG TH NOP"
-                    # =========================================================
-                    log_callback("📊 Đang cập nhật Sheet 'Bang TH nop'...")
-                    try:
-                        # Unprotect sheet trước khi sửa
-                        try: ws_source.Unprotect(Password=EXCEL_PASS)
-                        except: pass
-
-                        # Đọc danh sách các cột từ F4 đến AC4 để ánh xạ
-                        col_mapping = {}
-                        for col in range(6, 30): # F (6) -> AC (29)
-                            header_val = ws_source.Cells(4, col).Value
-                            if header_val:
-                                col_mapping[col] = normalize_str(header_val)
-
-                        # Xác định tập hợp mã nhân viên thuộc core (chính thức) của tổ này
-                        core_ids = {nv["ma"].upper(): nv for nv in core_org_list if nv.get("ma")}
-                        external_ids = {m.upper() for m in sorted_external}
-
-                        # Duyệt qua các dòng từ 9 đến 267, bước nhảy 2 dòng
-                        # Check cột B (họ tên) + C (mã NV), dừng nếu cả 2 trống
-                        for r in range(9, 268, 2):
-                            ten_nv = str(ws_source.Cells(r, 2).Value or "").strip()
-                            ma_nv = str(ws_source.Cells(r, 3).Value or "").strip().replace(".0", "")
-                            
-                            # Nếu cả cột B (tên) và C (mã) đều trống, dừng (tối ưu tài nguyên)
-                            if not ten_nv and not ma_nv:
-                                break
-                            
-                            if not ma_nv:
-                                # Nếu ô mã NV trống, xóa trắng các cột F:AC ở dòng này
-                                for col in range(6, 30):
-                                    ws_source.Cells(r, col).Value = None
-                                continue
-                            
-                            ma_nv_upper = ma_nv.upper()
-                            
-                            # Nếu là nhân viên ngoài tổ (external), bỏ trống phạm vi F:AC
-                            if ma_nv_upper in external_ids:
-                                for col in range(6, 30):
-                                    ws_source.Cells(r, col).Value = None
-                                continue
-                                
-                            # Nếu là nhân viên chính thức trong tổ
-                            if ma_nv_upper in core_ids or ma_nv_upper in [k.upper() for k in employee_dept_giay.keys()]:
-                                # Tìm thông tin giây/sản lượng của nhân viên này
-                                emp_giay_data = {}
-                                for k, v in employee_dept_giay.items():
-                                    if k.upper() == ma_nv_upper:
-                                        emp_giay_data = v
-                                        break
-                                
-                                for col in range(6, 30):
-                                    norm_header = col_mapping.get(col)
-                                    if not norm_header:
-                                        ws_source.Cells(r, col).Value = None
-                                        continue
-                                    
-                                    # Tính tổng giây từ các tổ trong employee_dept_giay khớp với cột này
-                                    total_val = 0.0
-                                    for json_to, val in emp_giay_data.items():
-                                        norm_json = normalize_str(json_to)
-                                        if teams_match(norm_json, norm_header):
-                                            total_val += val
-                                    
-                                    if total_val > 0:
-                                        ws_source.Cells(r, col).Value = total_val
-                                        ws_source.Cells(r, col).NumberFormat = "#,##0"
-                                    else:
-                                        ws_source.Cells(r, col).Value = None
-                            else:
-                                # Trường hợp mã nhân viên không có trong danh sách nào, xóa trắng F:AC
-                                for col in range(6, 30):
-                                    ws_source.Cells(r, col).Value = None
-
-                        
-                    except Exception as ex:
-                        log_callback(f"⚠️ Lỗi cập nhật Bang TH nop: {ex}")
-
-                    # Đảm bảo định dạng cho các ô tiêu đề đã merge trước khi Save
-                    ensure_merged_headers_format(wb)
-
-                    wb.Save()
-                    log_callback(f"✔ Hoàn tất và lưu file thành công.")
-                except Exception as e:
-                    log_callback(f"❌ Lỗi xử lý trong file {os.path.basename(excel_path)}: {e}")
-                finally:
-                    if wb is not None:
-                        try: wb.Close()
-                        except: pass
-                
-                # ✅ Cập nhật progress sau khi hoàn tất Case 1 (file có JSON)
-                processed_file_count += 1
-                if progress_callback and total_work_items > 0:
-                    progress_callback(int(((processed_count + processed_file_count) / total_work_items) * 100))
-
-            # Trường hợp 2: File Excel KHÔNG CÓ JSON sản lượng đi kèm
-            else:
-                # ✅ Skip file GT (bảo vệ, bếp ăn, v.v.) vì chúng không cần xử lý
-                # Chỉ xử lý file SX (tổ 1-12, cắt, hoàn thiện, kiểm hóa, v.v.)
-                is_sx_file = "\\sx\\" in excel_path.lower() or "/sx/" in excel_path.lower() or "tổ" in os.path.basename(excel_path).lower()
-                if not is_sx_file:
-                    log_callback(f"\n⏭️  Bỏ qua file GT: {os.path.basename(excel_path)} (template GT không yêu cầu xử lý)")
+                    ws = wb.Sheets("Bang TH nop")
+                except Exception as sheet_err:
+                    log_callback(f"[ERROR] Lỗi mở Sheet 'Bang TH nop': {sheet_err}")
                     continue
-                
-                log_callback(f"\n📂 Bắt đầu xử lý file (Không có sản lượng): {os.path.basename(excel_path)}")
-                try:
-                    wb = excel_app.Workbooks.Open(excel_path, UpdateLinks=0, ReadOnly=False, Password=EXCEL_PASS)
-                except:
-                    wb = excel_app.Workbooks.Open(excel_path)
 
                 try:
-                    # --- Mở khóa Workbook ---
-                    try: wb.Unprotect(Password=EXCEL_PASS)
-                    except:
-                        try: wb.Unprotect()
-                        except: pass
+                    ws.Unprotect(EXCEL_PASS)
+                    log_callback(f"[DEBUG] Đã Unprotect sheet bằng pass: {EXCEL_PASS}")
+                except Exception as unprotect_err:
+                    log_callback(f"[WARNING] Không thể Unprotect sheet (Có thể sheet không khóa): {unprotect_err}")
 
-                    ws_ds = None
-                    ws_tong_hop = None
-                    ws_source = None
-                    for s in wb.Sheets:
-                        if s.Name == "Danh sách":
-                            ws_ds = s
-                        elif s.Name in ["Tong hop cac ma", "Kiểm hóa may"]:
-                            ws_tong_hop = s
-                        elif s.Name == "Bang TH nop":
-                            ws_source = s
+                # Tìm hàng cuối cùng chứa dữ liệu ở cột B
+                last_row = ws.Cells(ws.Rows.Count, "B").End(-4162).Row  # -4162 = xlUp
+                log_callback(f"[DEBUG] Dòng cuối tìm thấy tại cột B: Dòng {last_row}")
+                if last_row < 7: 
+                    log_callback("[WARNING] Dòng cuối < 7, tự động đặt giả định bằng 200 dòng.")
+                    last_row = 200
 
-                    # Chỉ xử lý các file có sheet "Danh sách" (bắt buộc)
-                    # Sheet "Tong hop cac ma" tuỳ chọn, nhưng vẫn cập nhật "Bang TH nop"
-                    if ws_ds:
-                        log_callback("🔎 Phát hiện sheet 'Danh sách', tiến hành đồng bộ...")
-                        
-                        # Kiểm tra xem đây có phải file "Kiểm hóa" không
-                        is_kiem_hoa = "kiem" in os.path.basename(excel_path).lower()
-                        
-                        # 1. Đọc danh sách nhân viên từ sheet "Danh sách"
-                        core_org_list = []
-                        seen_ids_in_org = set()
-                        l_row_nv = ws_ds.Cells(ws_ds.Rows.Count, 4).End(-4162).Row
-                        for r in range(2, l_row_nv + 1):
-                            ma = str(ws_ds.Cells(r, 4).Value or "").strip().replace(".0", "")
-                            ten = str(ws_ds.Cells(r, 5).Value or "").strip()
-                            if ma and ten and ma not in seen_ids_in_org:
-                                core_org_list.append({"ma": ma, "ten": ten})
-                                seen_ids_in_org.add(ma)
+                # Đọc danh sách định vị
+                id_range_values = ws.Range(f"B7:B{last_row}").Value
+                header_range_values = ws.Range("C5:Z5").Value
 
-                        # 2. Cập nhật sheet "Tong hop cac ma" hoặc "Kiểm hóa may" nếu tồn tại
-                        if ws_tong_hop:
-                            try:
-                                try: ws_tong_hop.Unprotect(Password=EXCEL_PASS)
-                                except: pass
+                # Ánh xạ Mã NV -> Chỉ mục
+                row_map = {}
+                if id_range_values:
+                    for idx, val in enumerate(id_range_values):
+                        if val is not None:
+                            clean_id = str(val).strip().replace(".0", "")
+                            row_map[clean_id] = idx
+                log_callback(f"[DEBUG] Đã nạp thành công {len(row_map)} Mã nhân viên từ cột B của Excel vào bộ nhớ.")
 
-                                ws_tong_hop.Range("A9:Q1000").ClearContents()
-                                
-                                to_sx_name = os.path.basename(excel_path).split(" - ")[0]
-                                ws_tong_hop.Cells(2, 1).Value = f"BẢNG TỔNG HỢP GIÂY THÁNG {mm}/{yyyy} - {to_sx_name.upper()}"
-                                
-                                for idx, nv in enumerate(core_org_list):
-                                    r_m = 9 + idx * 2
-                                    ws_tong_hop.Cells(r_m, 1).Value = idx + 1
-                                    ws_tong_hop.Cells(r_m, 2).Value = nv["ten"]
-                                    ws_tong_hop.Cells(r_m, 3).Value = nv["ma"]
-                            except Exception as ex:
-                                log_callback(f"⚠️ Lỗi cập nhật tổng hợp: {ex}")
-                        else:
-                            log_callback("ℹ️ Không tìm thấy sheet 'Tong hop cac ma' hoặc 'Kiểm hóa may', bỏ qua bước này")
+                # Ánh xạ Tên Tổ -> Chỉ mục
+                col_map = {}
+                if header_range_values and header_range_values[0]:
+                    for idx, val in enumerate(header_range_values[0]):
+                        if val is not None:
+                            norm_header = normalize_str(val)
+                            col_map[norm_header] = idx
+                            log_callback(f"   -> Quét thấy cột Tổ Excel: '{val}' (Normalize: '{norm_header}') -> Chỉ mục mảng: {idx}")
 
+                # Tải khối ma trận dữ liệu từ C7 đến Z[last_row]
+                data_range = ws.Range(f"C7:Z{last_row}")
+                current_values = data_range.Value
+                grid_data = [list(row) for row in current_values] if current_values else []
 
-                        # 3. Cập nhật sheet "Bang TH nop" (LUÔN thực hiện nếu tồn tại)
-                        if ws_source:
-                            log_callback("📊 Đang cập nhật Sheet 'Bang TH nop'...")
-                            try:
-                                try: ws_source.Unprotect(Password=EXCEL_PASS)
-                                except: pass
+                if not grid_data:
+                    log_callback(f"[ERROR] Mảng dữ liệu lưới ô rỗng, không thể chỉnh sửa.")
+                    continue
 
-                                # Nếu đây là file "Kiểm hóa" mà không có JSON mới
-                                # Thì CHỈ cập nhật danh sách nhân viên từ "Danh sách", GIỮ nguyên dữ liệu cũ
-                                if is_kiem_hoa and total_mh_count == 0:
-                                    log_callback("ℹ️ File 'Kiểm hóa': Giữ nguyên dữ liệu cũ, chỉ đồng bộ danh sách nhân viên")
-                                    core_ids = {nv["ma"].upper(): nv for nv in core_org_list if nv.get("ma")}
-                                    
-                                    # Chỉ cập nhật cột B (tên) nếu cột C (mã) có giá trị từ "Danh sách"
-                                    for r in range(9, 268, 2):
-                                        ma_nv = str(ws_source.Cells(r, 3).Value or "").strip().replace(".0", "")
-                                        if not ma_nv:
-                                            break
-                                        
-                                        ma_nv_upper = ma_nv.upper()
-                                        if ma_nv_upper in core_ids:
-                                            # Cập nhật tên nếu khác
-                                            ws_source.Cells(r, 2).Value = core_ids[ma_nv_upper]["ten"]
-                                else:
-                                    # Trường hợp bình thường: Cập nhật dữ liệu từ JSON (nếu có)
-                                    # Đọc danh sách các cột từ F4 đến AC4 để ánh xạ
-                                    col_mapping = {}
-                                    for col in range(6, 30):
-                                        header_val = ws_source.Cells(4, col).Value
-                                        if header_val:
-                                            col_mapping[col] = normalize_str(header_val)
+                # ================================
+                # 5. ĐIỀN DỮ LIỆU VÀO MẢNG TRÊN RAM
+                # ================================
+                items = excel_groups.get(excel_path, [])
+                for item in items:
+                    data = item["data"]
+                    info = data["thong_tin_chung"]
+                    ma_hang = info.get("ma_hang", "UNKNOWN")
 
-                                    core_ids = {nv["ma"].upper(): nv for nv in core_org_list if nv.get("ma")}
+                    log_callback(f"[MÃ HÀNG] Đang xử lý: {ma_hang}")
 
-                                    # Duyệt qua các dòng từ 9 đến 267, bước nhảy 2 dòng
-                                    # Check cột B (họ tên) + C (mã NV), dừng nếu cả 2 trống
-                                    for r in range(9, 268, 2):
-                                        ten_nv = str(ws_source.Cells(r, 2).Value or "").strip()
-                                        ma_nv = str(ws_source.Cells(r, 3).Value or "").strip().replace(".0", "")
-                                        
-                                        # Nếu cả cột B (tên) và C (mã) đều trống, dừng (tối ưu tài nguyên)
-                                        if not ten_nv and not ma_nv:
-                                            break
-                                        
-                                        if not ma_nv:
-                                            # Nếu ô mã NV trống, xóa trắng các cột F:AC ở dòng này
-                                            for col in range(6, 30):
-                                                ws_source.Cells(r, col).Value = None
-                                            continue
-                                        
-                                        ma_nv_upper = ma_nv.upper()
-                                        
-                                        # Nếu là nhân viên chính thức trong tổ
-                                        if ma_nv_upper in core_ids or ma_nv_upper in [k.upper() for k in employee_dept_giay.keys()]:
-                                            # Tìm thông tin giây/sản lượng của nhân viên này
-                                            emp_giay_data = {}
-                                            for k, v in employee_dept_giay.items():
-                                                if k.upper() == ma_nv_upper:
-                                                    emp_giay_data = v
-                                                    break
+                    for cd in data.get("danh_sach_cong_doan", []):
+                        for th in cd.get("thuc_hien", []):
+                            m_id = str(th.get("ma_nhan_vien", "")).strip().replace(".0", "")
+                            sl = float(th.get("so_luong", 0))
+
+                            if not m_id or sl <= 0:
+                                continue
+
+                            # Kiểm tra sự tồn tại của Mã NV trong Excel
+                            if m_id in row_map:
+                                array_row_idx = row_map[m_id]
+                                dept_giay_dict = employee_dept_giay.get(m_id, {})
+
+                                for json_dept, total_giay in dept_giay_dict.items():
+                                    norm_json_dept = normalize_str(json_dept)
+                                    is_mapped_col = False
+
+                                    for norm_header, array_col_idx in col_map.items():
+                                        if teams_match(norm_json_dept, norm_header):
                                             
-                                            for col in range(6, 30):
-                                                norm_header = col_mapping.get(col)
-                                                if not norm_header:
-                                                    ws_source.Cells(r, col).Value = None
-                                                    continue
-                                                
-                                                # Tính tổng giây từ các tổ trong employee_dept_giay khớp với cột này
-                                                total_val = 0.0
-                                                for json_to, val in emp_giay_data.items():
-                                                    norm_json = normalize_str(json_to)
-                                                    if teams_match(norm_json, norm_header):
-                                                        total_val += val
-                                                
-                                                if total_val > 0:
-                                                    ws_source.Cells(r, col).Value = total_val
-                                                    ws_source.Cells(r, col).NumberFormat = "#,##0"
-                                                else:
-                                                    ws_source.Cells(r, col).Value = None
-                                        else:
-                                            # Trường hợp mã nhân viên không có trong danh sách nào, xóa trắng F:AC
-                                            for col in range(6, 30):
-                                                ws_source.Cells(r, col).Value = None
+                                            # LOG ĐỐI CHIẾU GIÁ TRỊ TRƯỚC/SAU KHI GHI
+                                            val_cu = grid_data[array_row_idx][array_col_idx]
+                                            grid_data[array_row_idx][array_col_idx] = total_giay
+                                            is_mapped_col = True
+                                            
+                                            log_callback(f"   [OK MATCH] Nhân viên {m_id} | Tổ JSON: '{json_dept}' khớp với cột Excel: '{norm_header}' -> Ghi giá trị: {total_giay} (Cũ: {val_cu})")
+                                            break
+                                    
+                                    if not is_mapped_col:
+                                        log_callback(f"   [FAIL COL] Nhân viên {m_id} có Tổ JSON '{json_dept}' nhưng KHÔNG KHỚP với bất kỳ cột nào trên dòng 5 Excel!")
+                            else:
+                                # Log cảnh báo nếu mã nhân viên trong JSON không có trong file Excel
+                                log_callback(f"   [FAIL ROW] Mã NV '{m_id}' trong JSON không tìm thấy tại cột B (Từ dòng 7) của file Excel này!")
 
-                            except Exception as ex:
-                                log_callback(f"⚠️ Lỗi cập nhật Bang TH nop: {ex}")
-                        else:
-                            log_callback("ℹ️ Không tìm thấy sheet 'Bang TH nop' để cập nhật")
+                    processed_count += 1
+                    if progress_callback and total_work:
+                        progress_callback(int(processed_count * 100 / total_work))
 
-                        # Đảm bảo định dạng cho các ô tiêu đề đã merge trước khi Save
-                        ensure_merged_headers_format(wb)
+                # Thực hiện ép mảng xuống Excel
+                log_callback(f"[EXCEL] Tiến hành ép mảng RAM xuống vùng ô dữ liệu C7:Z{last_row}...")
+                data_range.Value = grid_data
+                log_callback("[EXCEL] Ép mảng thành công!")
 
-                        wb.Save()
-                        log_callback(f"✔ Hoàn tất và lưu file thành công.")
-                    else:
-                        log_callback("ℹ️ Bỏ qua vì không tìm thấy sheet 'Danh sách'.")
-                except Exception as e:
-                    log_callback(f"❌ Lỗi xử lý trong file {os.path.basename(excel_path)}: {e}")
-                finally:
-                    if wb is not None:
-                        try: wb.Close()
-                        except: pass
-                
-                # ✅ Cập nhật progress cho file không có JSON
-                processed_file_count += 1
-                if progress_callback and total_work_items > 0:
-                    progress_callback(int(((processed_count + processed_file_count) / total_work_items) * 100))
+                try:
+                    ws.Protect(EXCEL_PASS)
+                except:
+                    pass
+
+                log_callback(f"[EXCEL] Tiến hành Save file: {os.path.basename(excel_path)}")
+                wb.Save()
+                log_callback("[EXCEL] Lưu thành công!")
+
+            except Exception as e:
+                log_callback(f"[CRITICAL ERROR] Lỗi trong phiên làm việc của file Excel {os.path.basename(excel_path)}: {e}")
+
+            finally:
+                if wb:
+                    try:
+                        wb.Close(False)
+                    except:
+                        pass
+                    del wb
+                    gc.collect()
 
         if progress_callback:
             progress_callback(100)
 
-    except Exception as e:
-        return False, f"❌ Lỗi hệ thống: {str(e)}"
     finally:
         if excel_app:
             excel_app.ScreenUpdating = True
             excel_app.DisplayAlerts = True
             excel_app.Quit()
+            del excel_app
+
         pythoncom.CoUninitialize()
         gc.collect()
-        
-    return True, f"Xử lý thành công {processed_count} mã hàng."
+
+    return True, f"Hoàn thành tích hợp: {processed_count} mặt hàng."

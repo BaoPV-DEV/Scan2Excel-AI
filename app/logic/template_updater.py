@@ -4,119 +4,131 @@ import pythoncom
 import win32com.client as win32
 from dotenv import load_dotenv
 
-# Hàm chuyển đổi cột số thành chữ cái (VD: 6 -> "F", 29 -> "AC")
-def get_column_letter(col_idx):
-    """Chuyển đổi chỉ số cột (1-based) thành chữ cái Excel."""
+
+# =========================
+# CONFIG
+# =========================
+START_COL = 6   # F
+END_COL = 29    # AC
+SHEET_NAME = "Bang TH nop"
+
+
+# =========================
+# UTILS
+# =========================
+def get_column_letter(col_idx: int) -> str:
     result = ""
     while col_idx > 0:
-        col_idx, remainder = divmod(col_idx - 1, 26)
-        result = chr(65 + remainder) + result
+        col_idx, rem = divmod(col_idx - 1, 26)
+        result = chr(65 + rem) + result
     return result
 
+
+def safe_open_workbook(excel_app, path, password=None):
+    """Mở workbook an toàn (có retry fallback không password)."""
+    try:
+        return excel_app.Workbooks.Open(
+            os.path.abspath(path),
+            UpdateLinks=0,
+            ReadOnly=False,
+            Password=password
+        )
+    except Exception:
+        return excel_app.Workbooks.Open(os.path.abspath(path))
+
+
+def find_sheet(wb, name: str):
+    for s in wb.Sheets:
+        if s.Name == name:
+            return s
+    return None
+
+
+def set_headers(ws, titles, log_callback):
+    """
+    Ghi headers F -> AC + ẩn cột thừa.
+    """
+    ws.Range(f"F4:{get_column_letter(END_COL)}4").ClearContents()
+
+    max_len = END_COL - START_COL + 1
+    titles = titles[:max_len]
+
+    # batch read/write COM (giảm overhead)
+    for i, col in enumerate(range(START_COL, END_COL + 1)):
+        col_letter = get_column_letter(col)
+
+        if i < len(titles):
+            val = titles[i].strip()
+            ws.Cells(4, col).Value = val
+            ws.Columns(col).Hidden = False
+        else:
+            ws.Columns(col).Hidden = True
+
+
+# =========================
+# CORE FUNCTION
+# =========================
 def update_templates_with_headers(titles, log_callback, progress_callback=None):
     """
-    Cập nhật danh sách tiêu đề cột F -> AC ở dòng 4 sheet 'Bang TH nop' cho 2 template:
-    - Template\\sx\\to_may_template.xlsx
-    - Template\\sx\\kiem_hoa_template.xlsx
+    Update headers F->AC dòng 4 cho 2 template SX.
     """
+
     load_dotenv()
     EXCEL_PASS = os.getenv("EXCEL_SHEET_PASSWORD", "8863")
 
-    # Xác định đường dẫn tuyệt đối của các template
-    logic_dir = os.path.abspath(os.path.dirname(__file__))
-    workspace_dir = os.path.abspath(os.path.join(logic_dir, ".."))
-    
-    template_paths = {
-        "Tổ May Template": os.path.join(workspace_dir, "Template", "sx", "to_may_template.xlsx"),
-        "Kiểm Hóa Template": os.path.join(workspace_dir, "Template", "sx", "kiem_hoa_template.xlsx")
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+
+    templates = {
+        "to_may": os.path.join(base_dir, "resources", "templates", "sx", "to_may_template.xlsx"),
+        "kiem_hoa": os.path.join(base_dir, "resources", "templates", "sx", "kiem_hoa_template.xlsx"),
     }
 
-    # Kiểm tra sự tồn tại của file
-    for name, path in template_paths.items():
-        if not os.path.exists(path):
-            log_callback(f"❌ Không tìm thấy file template '{name}' tại: {path}")
-            return False, f"Thiếu file: {os.path.basename(path)}"
+    # validate file tồn tại
+    for k, p in templates.items():
+        if not os.path.exists(p):
+            log_callback(f"❌ Missing template: {k} -> {p}")
+            return False, f"Missing {k}"
 
-    # Giới hạn số lượng tiêu đề cột từ F (6) đến AC (29) -> tối đa 24 cột
-    MAX_COLS = 24
-    if len(titles) > MAX_COLS:
-        log_callback(f"⚠️ Danh sách tiêu đề ({len(titles)}) vượt quá giới hạn 24 cột (F -> AC). Chỉ lấy 24 cột đầu tiên.")
-        titles = titles[:MAX_COLS]
+    if len(titles) > (END_COL - START_COL + 1):
+        titles = titles[: (END_COL - START_COL + 1)]
+        log_callback("⚠️ Titles truncated to fit F->AC")
 
     pythoncom.CoInitialize()
-    excel_app = None
-    success_count = 0
+    excel = None
+    success = 0
 
     try:
-        log_callback("🚀 Khởi động ứng dụng Excel...")
-        excel_app = win32.DispatchEx("Excel.Application")
-        excel_app.Visible = False
-        excel_app.DisplayAlerts = False
-        excel_app.ScreenUpdating = False
+        excel = win32.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        excel.ScreenUpdating = False
 
-        total_templates = len(template_paths)
-        for idx, (name, path) in enumerate(template_paths.items()):
-            log_callback(f"\n📂 Đang mở template: {os.path.basename(path)}")
+        for idx, (name, path) in enumerate(templates.items(), 1):
+            log_callback(f"\n📄 Processing: {os.path.basename(path)}")
+
             wb = None
             try:
-                wb = excel_app.Workbooks.Open(os.path.abspath(path), UpdateLinks=0, ReadOnly=False, Password=EXCEL_PASS)
-            except Exception as e:
-                log_callback(f"⚠️ Không thể mở bằng mật khẩu, thử mở bình thường: {e}")
-                try:
-                    wb = excel_app.Workbooks.Open(os.path.abspath(path))
-                except Exception as ex:
-                    log_callback(f"❌ Lỗi mở file {os.path.basename(path)}: {ex}")
-                    continue
-
-            try:
-                # Tìm sheet "Bang TH nop"
-                ws = None
-                for sheet in wb.Sheets:
-                    if sheet.Name == "Bang TH nop":
-                        ws = sheet
-                        break
+                wb = safe_open_workbook(excel, path, EXCEL_PASS)
+                ws = find_sheet(wb, SHEET_NAME)
 
                 if not ws:
-                    log_callback(f"❌ Không tìm thấy Sheet 'Bang TH nop' trong template: {os.path.basename(path)}")
+                    log_callback(f"❌ Missing sheet: {SHEET_NAME}")
                     continue
 
-                # Mở khóa sheet nếu bị khóa
                 try:
                     ws.Unprotect(Password=EXCEL_PASS)
                 except:
-                    try:
-                        ws.Unprotect()
-                    except:
-                        pass
+                    ws.Unprotect()
 
-                # Xóa trắng nội dung cũ trong khoảng F4:AC4 để giữ nguyên format
-                log_callback("🧼 Đang xóa sạch nội dung tiêu đề cũ từ F4 đến AC4...")
-                ws.Range("F4:AC4").ClearContents()
+                set_headers(ws, titles, log_callback)
 
-                # Điền tiêu đề và ẩn/hiện cột tương ứng
-                log_callback("✍️ Đang ghi tiêu đề mới và thiết lập ẩn/hiện cột...")
-                for col in range(6, 30):  # F (6) -> AC (29)
-                    title_idx = col - 6
-                    col_letter = get_column_letter(col)
-
-                    if title_idx < len(titles):
-                        val = titles[title_idx].strip()
-                        ws.Cells(4, col).Value = val
-                        ws.Columns(col).EntireColumn.Hidden = False
-                        log_callback(f"   🔹 Cột {col_letter}: Hiện thị & Ghi giá trị '{val}'")
-                    else:
-                        ws.Columns(col).EntireColumn.Hidden = True
-                        log_callback(f"   💤 Cột {col_letter}: Ẩn cột (Không dùng)")
-
-
-
-                # Lưu và đóng
                 wb.Save()
-                log_callback(f"💾 Đã lưu thành công: {os.path.basename(path)}")
-                success_count += 1
+                success += 1
+                log_callback(f"💾 Saved: {os.path.basename(path)}")
 
             except Exception as e:
-                log_callback(f"❌ Lỗi khi cập nhật sheet của file {os.path.basename(path)}: {e}")
+                log_callback(f"❌ Error: {e}")
+
             finally:
                 if wb:
                     try:
@@ -125,28 +137,18 @@ def update_templates_with_headers(titles, log_callback, progress_callback=None):
                         pass
                     del wb
 
-            # Cập nhật tiến độ
             if progress_callback:
-                progress_callback(int(((idx + 1) / total_templates) * 100))
+                progress_callback(int(idx / len(templates) * 100))
 
-    except Exception as e:
-        log_callback(f"❌ Lỗi hệ thống: {e}")
-        return False, str(e)
+        return success == len(templates), f"{success}/{len(templates)} updated"
+
     finally:
-        if excel_app:
+        if excel:
             try:
-                excel_app.ScreenUpdating = True
-                excel_app.DisplayAlerts = True
-                excel_app.Quit()
+                excel.Quit()
             except:
                 pass
-            del excel_app
+            del excel
+
         pythoncom.CoUninitialize()
         gc.collect()
-
-    if success_count == len(template_paths):
-        log_callback("\n🎉 CẬP NHẬT CẢ 2 TEMPLATE HOÀN TẤT THÀNH CÔNG!")
-        return True, "Cập nhật thành công 2 template."
-    else:
-        log_callback(f"\n⚠️ Hoàn tất với cảnh báo: Cập nhật thành công {success_count}/{len(template_paths)} template.")
-        return False, f"Chỉ cập nhật thành công {success_count}/{len(template_paths)} template."
